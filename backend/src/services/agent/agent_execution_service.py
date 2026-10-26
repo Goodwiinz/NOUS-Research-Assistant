@@ -1178,6 +1178,16 @@ async def _resolve_thread(
             str(current_user.id)
         ):
             raise AgentThreadResolutionError("Thread not found")
+        if (
+            create_if_missing
+            and getattr(thread, "message_branching", False) is True
+            and (
+                getattr(request, "branch_document_id", None) is None
+                or getattr(request, "branch_document_id", None)
+                != thread.branch_document_id
+            )
+        ):
+            raise AgentThreadResolutionError("PDF branch scope is required")
         return thread, str(thread.conversation_id)
 
     if not create_if_missing:
@@ -1757,6 +1767,23 @@ async def _persist_user_message(
     if last is None:
         return False
 
+    # Serialize with branch opt-in: a job resolved before the first branch
+    # acceptance must not write a linear row after that acceptance commits.
+    from sqlalchemy import select
+
+    from src.services.threads.message_branches import BranchAccessError
+
+    branch_thread = (
+        await db.execute(
+            select(Thread)
+            .where(Thread.id == UUID(request.thread_id))
+            .with_for_update(of=Thread)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if branch_thread is not None and branch_thread.message_branching is True:
+        raise BranchAccessError(409, "PDF branches require atomic stream acceptance")
+
     cmid = getattr(last, "client_message_id", None)
     cmid_value = str(cmid) if cmid is not None else None
     supersedes = getattr(request, "supersedes_client_message_id", None)
@@ -1857,11 +1884,13 @@ async def _persist_user_message_guarded(
     could not be found). It is reset before each attempt so a retry cannot
     double-count.
 
-    Never raises — the caller still continues the turn (a durable-persist
-    failure must not abort a chat that can still stream an answer). Returns the
+    Branch authority failures raise: continuing could mix private sibling
+    history. Other persistence failures retain the legacy fallback. Returns the
     underlying insert result on success (``True`` inserted / ``False`` duplicate
     or nothing to insert), or ``False`` when both attempts failed.
     """
+    from src.services.threads.message_branches import BranchAccessError
+
     last_exc: Optional[Exception] = None
     # ``any`` is STICKY across attempts, ``count`` is not. An attempt can commit
     # its tombstone UPDATEs and still raise on the way out (ambiguous commit) —
@@ -1882,6 +1911,9 @@ async def _persist_user_message_guarded(
             return await _persist_user_message(
                 db, current_user, request, tombstoned_out=tombstoned_out
             )
+        except BranchAccessError:
+            await db.rollback()
+            raise
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if tombstoned_out is not None:
@@ -2002,6 +2034,7 @@ async def _persist_assistant_message(
     reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
+    parent_message_id: Optional[str] = None,
 ) -> Optional[str]:
     """Insert the assistant turn and bump ``thread.message_count`` by 1.
 
@@ -2033,6 +2066,37 @@ async def _persist_assistant_message(
     from src.models.chat_message import ChatMessage, MessageRole
     from src.models.citation import Citation as CitationModel
     from src.models.thread import Thread
+    from src.services.threads.message_branches import (
+        link_assistant_branch,
+        prepare_assistant_branch,
+    )
+
+    branch_thread = await prepare_assistant_branch(
+        db,
+        thread_id=UUID(thread_id),
+        parent_message_id=UUID(parent_message_id) if parent_message_id else None,
+    )
+    if branch_thread is not None:
+        assert parent_message_id is not None
+        # Confirmation can use a different checkpoint-derived client key.
+        # Under the thread lock the accepted question is the canonical reply
+        # identity; never insert a second row for a changed transport key.
+        branch_existing_id = await db.scalar(
+            select(ChatMessage.id).where(
+                ChatMessage.thread_id == UUID(thread_id),
+                ChatMessage.parent_message_id == UUID(parent_message_id),
+                ChatMessage.role == MessageRole.ASSISTANT,
+            )
+        )
+        if branch_existing_id is not None:
+            await link_assistant_branch(
+                db,
+                branch_thread,
+                assistant_message_id=UUID(str(branch_existing_id)),
+                accepted_user_message_id=UUID(parent_message_id),
+            )
+            await db.commit()
+            return str(branch_existing_id)
 
     tool_exec_data = None
     if tool_executions_out:
@@ -2065,6 +2129,11 @@ async def _persist_assistant_message(
         reasoning_summary=reasoning_summary,
         token_usage=token_usage,
         progress_steps=progress_steps,
+        parent_message_id=(
+            UUID(parent_message_id)
+            if branch_thread is not None and parent_message_id
+            else None
+        ),
     )
 
     if client_message_id is not None:
@@ -2095,8 +2164,16 @@ async def _persist_assistant_message(
                     ChatMessage.role == MessageRole.ASSISTANT,
                 )
             )
-            await db.commit()
             existing_id = existing.scalar_one_or_none()
+            if branch_thread is not None and existing_id is not None:
+                assert parent_message_id is not None
+                await link_assistant_branch(
+                    db,
+                    branch_thread,
+                    assistant_message_id=UUID(str(existing_id)),
+                    accepted_user_message_id=UUID(parent_message_id),
+                )
+            await db.commit()
             return str(existing_id) if existing_id is not None else None
         msg_id = inserted_id
     else:
@@ -2128,6 +2205,14 @@ async def _persist_assistant_message(
     if thread is not None:
         thread.message_count = (thread.message_count or 0) + 1
         thread.last_message_at = datetime.now(timezone.utc)
+    if branch_thread is not None:
+        assert parent_message_id is not None
+        await link_assistant_branch(
+            db,
+            branch_thread,
+            assistant_message_id=UUID(str(msg_id)),
+            accepted_user_message_id=UUID(parent_message_id),
+        )
     await db.commit()
 
     # Mirror chat_service.create_message's summarization trigger so
@@ -2166,6 +2251,7 @@ async def _persist_assistant_message_safe(
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
     required: bool = False,
+    parent_message_id: Optional[str] = None,
 ) -> Optional[str]:
     """Background-task-safe wrapper around ``_persist_assistant_message``.
 
@@ -2196,6 +2282,7 @@ async def _persist_assistant_message_safe(
                 reasoning_summary=reasoning_summary,
                 token_usage=token_usage,
                 progress_steps=progress_steps,
+                parent_message_id=parent_message_id,
             )
             if required and persisted_id is None:
                 raise RuntimeError("Assistant message persistence returned no id")
@@ -2477,7 +2564,7 @@ async def _run_agent_graph(
             # Any resolution failure (access loss or a DB error during the
             # re-check) fails the run: continuing would run the graph on an
             # unverified ``request.thread_id`` checkpoint labelled ephemeral.
-            # The persist below never raises (_persist_user_message_guarded).
+            # Branch authority errors from the guarded persist also fail closed.
             thread_obj, _conversation_id = await _resolve_thread(
                 db, current_user, request
             )
@@ -2555,7 +2642,7 @@ async def _run_agent_graph(
             # org-scoped (R7-M2) so a raw client-supplied project_id can never
             # pull another tenant's memories into the prompt.
             project_memories: list = []
-            if _pm_project_id:
+            if _pm_project_id and not getattr(request, "document_only", False):
                 try:
                     from src.services.research.project_memory_service import (
                         load_project_memories,
@@ -2592,6 +2679,14 @@ async def _run_agent_graph(
                     str(document_id)
                     for document_id in (getattr(request, "attachment_ids", None) or [])
                 ],
+                "selection_page_range": getattr(request, "selection_page_range", None),
+                "page_filter_model": getattr(request, "page_filter_model", None),
+                "branch_document_id": (
+                    str(getattr(request, "branch_document_id", None))
+                    if getattr(request, "branch_document_id", None) is not None
+                    else None
+                ),
+                "document_only": getattr(request, "document_only", False),
                 "thread_id": request.thread_id or "",
                 "thread_persistence": (
                     THREAD_PERSISTENCE_DURABLE
@@ -2601,6 +2696,7 @@ async def _run_agent_graph(
                 "project_memories": project_memories,
                 "user_id": str(current_user.id),
                 "model": request.model,
+                "reasoning_effort": getattr(request, "reasoning_effort", None),
                 "use_rag": request.use_rag,
                 **runtime_state_fields(
                     runtime_snapshot, page_context.get("project_id")
@@ -2789,6 +2885,7 @@ async def _run_agent_graph(
                 finish_reason="stop",
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 rag_enabled=request.use_rag,
+                page_filter=final_state.get("page_filter"),
                 retrieved_contexts=[
                     RetrievedContextResponse(**rc)
                     for rc in final_state.get("retrieved_contexts", [])
@@ -3285,6 +3382,7 @@ async def _resume_agent_graph(
                 usage={"input_tokens": in_tok, "output_tokens": out_tok},
                 finish_reason="stop",
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                page_filter=final_state.get("page_filter"),
                 tool_executions=[
                     ToolExecutionResponse(**te)
                     for te in final_state.get("tool_executions", [])

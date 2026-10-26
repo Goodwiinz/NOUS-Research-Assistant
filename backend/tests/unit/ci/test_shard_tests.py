@@ -185,6 +185,13 @@ def test_recovery_postgres_step_requires_executed_tests(
         "test_ingestion_stage_guard_postgres.py",
     ):
         assert f"backend/tests/unit/tasks/{module}" in step["run"]
+    # GOO-436: the PDF-chat branch suites skip without a PostgreSQL URL.
+    for module in (
+        "test_message_branches_postgres.py",
+        "test_alphaxiv_live_postgres.py",
+        "test_native_pdf_branch_reads_postgres.py",
+    ):
+        assert f"backend/tests/unit/services/{module}" in step["run"]
 
     # Execute the actual workflow shell against pytest's possible outcomes.
     # In particular, pytest exits zero when every selected test skips.

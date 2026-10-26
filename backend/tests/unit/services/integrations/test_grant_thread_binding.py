@@ -22,6 +22,7 @@ from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
@@ -83,6 +84,7 @@ async def db() -> AsyncIterator[AsyncSession]:
         Collection,
         Conversation,
         Thread,
+        ProjectThread,
         AgentRun,
         BridgeDevice,
         WorkspaceBinding,
@@ -182,14 +184,20 @@ async def db() -> AsyncIterator[AsyncSession]:
 
 
 async def _request(
-    db: AsyncSession, thread_id: UUID | None, user: Any = OWNER
+    db: AsyncSession,
+    thread_id: UUID | None,
+    user: Any = OWNER,
+    project_id: UUID = PROJECT,
 ) -> GrantRequestDTO:
     device = await register_device(db, user, DeviceCreate(label="Laptop"))
     return await create_request(
         db,
         user,
         GrantRequestCreate(
-            project_id=PROJECT, device_id=device.id, scopes=SCOPES, thread_id=thread_id
+            project_id=project_id,
+            device_id=device.id,
+            scopes=SCOPES,
+            thread_id=thread_id,
         ),
     )
 
@@ -474,3 +482,134 @@ async def test_every_other_mint_denial_stays_opaque(
     with pytest.raises(IntegrationAccessDenied) as denied:
         await _mint_run(db, device.id, THREAD, {"harness:execute"})
     assert type(denied.value) is IntegrationAccessDenied
+
+
+async def _link(db: AsyncSession, project_id: UUID, thread_id: UUID = THREAD) -> None:
+    """What attach_thread_to_project does (its Postgres upsert cannot run on
+    SQLite): keep or restore a live link row, then repoint the chat's current
+    project at it. Linking never removes the chat's other links."""
+    existing = await db.scalar(
+        select(ProjectThread.id).where(
+            ProjectThread.project_id == project_id,
+            ProjectThread.thread_id == thread_id,
+        )
+    )
+    if existing is None:
+        await db.execute(
+            insert(ProjectThread).values(
+                id=uuid4(),
+                project_id=project_id,
+                thread_id=thread_id,
+                link_type="manual",
+            )
+        )
+    else:
+        await db.execute(
+            update(ProjectThread)
+            .where(ProjectThread.id == existing)
+            .values(is_deleted=False)
+        )
+    await db.execute(
+        update(Thread)
+        .where(Thread.id == thread_id)
+        .values(source_project_id=project_id)
+    )
+    await db.commit()
+
+
+async def _unlink(db: AsyncSession, project_id: UUID, thread_id: UUID = THREAD) -> None:
+    """The unlink route soft-deletes the link row (here the chat's current
+    project already points elsewhere, so the scalar is left alone)."""
+    await db.execute(
+        update(ProjectThread)
+        .where(
+            ProjectThread.project_id == project_id,
+            ProjectThread.thread_id == thread_id,
+        )
+        .values(is_deleted=True)
+    )
+    await db.commit()
+
+
+async def test_a_chat_linked_elsewhere_still_binds_to_a_project_that_lists_it(
+    db: AsyncSession,
+) -> None:
+    # AD-2 A: T started in PROJECT, then a member linked it to OTHER_PROJECT
+    # from the chat's project picker. Linking is additive, so PROJECT's Chat
+    # tab still lists T and `connect --project PROJECT --chat T` must work.
+    await _link(db, PROJECT)
+    await _link(db, OTHER_PROJECT)
+    request = await _request(db, THREAD)
+    assert request.thread_id == THREAD
+    await decide_request(db, OWNER, request.id, approved=True)
+    issued = await exchange_request(db, OWNER, request.id)
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope="tools:read"
+    )
+    assert ctx.project_id == PROJECT and ctx.thread_id == THREAD
+
+
+@pytest.mark.parametrize(
+    ("bound", "relinked"),
+    [(PROJECT, OTHER_PROJECT), (OTHER_PROJECT, PROJECT)],
+    ids=["linked-away-from-the-bound-project", "linked-back-to-the-first-project"],
+)
+async def test_relinking_a_bound_chat_keeps_its_device_grant(
+    db: AsyncSession, bound: UUID, relinked: UUID
+) -> None:
+    # AD-2 B: a device bound to (bound, T) survives a member linking T to
+    # another project of the workspace, in either direction.
+    await _link(db, PROJECT)
+    await _link(db, bound)
+    request = await _request(db, THREAD, project_id=bound)
+    await decide_request(db, OWNER, request.id, approved=True)
+    issued = await exchange_request(db, OWNER, request.id)
+    await _link(db, relinked)
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope="tools:read"
+    )
+    assert ctx.project_id == bound and ctx.thread_id == THREAD
+    renewed = await renew_grant(db, OWNER, issued.grant_id)
+    again = await resolve_integration_context(
+        db, renewed.token, required_scope="tools:read"
+    )
+    assert again.project_id == bound
+
+
+async def test_unlinking_the_bound_project_ends_the_binding(db: AsyncSession) -> None:
+    # Guard: only a LIVE link binds. Once PROJECT no longer lists the chat,
+    # its device grant and any new request for (PROJECT, T) are refused.
+    await _link(db, PROJECT)
+    issued = await _issue(db, THREAD)
+    await _link(db, OTHER_PROJECT)
+    await _unlink(db, PROJECT)
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, issued.token, required_scope="tools:read")
+    with pytest.raises(IntegrationAccessDenied):
+        await _request(db, THREAD)
+
+
+async def test_a_link_to_a_project_in_another_workspace_does_not_bind(
+    db: AsyncSession,
+) -> None:
+    # Guard: legacy cross-workspace link rows exist (the unlink route skips
+    # them) and no project's Chat tab lists them, so they never bind.
+    elsewhere_workspace, elsewhere = uuid4(), uuid4()
+    await db.execute(
+        insert(Workspace).values(
+            id=elsewhere_workspace, name="E", owner_id=USER, organization_id=ORG
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=elsewhere, name="Elsewhere", workspace_id=elsewhere_workspace
+        )
+    )
+    await db.execute(
+        insert(ProjectThread).values(
+            id=uuid4(), project_id=elsewhere, thread_id=THREAD, link_type="manual"
+        )
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await _request(db, THREAD, project_id=elsewhere)

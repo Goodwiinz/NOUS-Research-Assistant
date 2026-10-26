@@ -2084,6 +2084,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/arxiv/papers/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metadata */
+        get: operations["metadata_api_v1_arxiv_papers_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pdf */
+        get: operations["pdf_api_v1_arxiv_papers_pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recent */
+        post: operations["recent_api_v1_arxiv_papers_recent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync */
+        post: operations["sync_api_v1_arxiv_papers_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/arxiv/search": {
         parameters: {
             query?: never;
@@ -4221,6 +4289,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/devices/{device_id}/account-workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Account Workspace Bindings
+         * @description The device's account folders, while its account approval lives;
+         *     empty otherwise.
+         */
+        get: operations["get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get"];
+        put?: never;
+        /**
+         * Create Account Workspace Binding
+         * @description Register an account folder: needs a live account approval of this
+         *     device that can run Codex (403 otherwise).
+         */
+        post: operations["create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices/{device_id}/revoke": {
         parameters: {
             query?: never;
@@ -4248,7 +4342,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Workspace Bindings */
+        /**
+         * Get Workspace Bindings
+         * @description The device's project folders. Account folders are listed by
+         *     GET /devices/{device_id}/account-workspaces.
+         */
         get: operations["get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get"];
         put?: never;
         /** Create Workspace Binding */
@@ -4892,8 +4990,10 @@ export interface paths {
          * @description Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).
          *
          *     Deletes every Entity node owned by the caller's organization (and, via
-         *     DETACH DELETE, their relationships). Global schema constraints/indexes are
-         *     (idempotently) re-ensured.
+         *     DETACH DELETE, their relationships). Deleting nodes does not drop the
+         *     global constraints/indexes; those are owned by the startup bootstrap
+         *     (``_connect`` → ``_maybe_ensure_schema``, retried from ``get_session``),
+         *     so a tenant request must not re-run that global DDL.
          */
         post: operations["reset_graph_schema_api_v1_knowledge_graph_schema_reset_post"];
         delete?: never;
@@ -9178,7 +9278,12 @@ export interface paths {
         put?: never;
         /**
          * Rebuild Search Indexes
-         * @description Rebuild full-text search indexes (admin only)
+         * @description Rebuild full-text search vectors for the caller's organization (admin only)
+         *
+         *     Index DDL is deployment-owned (Alembic ``p3q4r5s6t7u8`` creates the GIN
+         *     index on ``documents.search_vector``); a tenant admin's request must not
+         *     run ``CREATE INDEX`` against the shared ``documents`` table. This endpoint
+         *     only recomputes ``search_vector`` for the caller's organization.
          */
         post: operations["rebuild_search_indexes_api_v1_search_indexes_rebuild_post"];
         delete?: never;
@@ -10534,9 +10639,29 @@ export interface paths {
         };
         /**
          * Get Thread Handoff
-         * @description Latest harness handoff left in this chat (standalone route).
+         * @description Preserve the original object-or-404 contract for existing clients.
          */
         get: operations["get_thread_handoff_api_v2_threads__thread_id__handoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Latest Thread Handoff
+         * @description Latest handoff, or null for an authorized chat without one.
+         */
+        get: operations["get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11159,6 +11284,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Chats */
+        get: operations["list_chats_assistant_v2_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat V2 */
+        post: operations["chat_v2_assistant_v2_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/context-window-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Context Window Usage */
+        get: operations["context_window_usage_assistant_v2__chat_id__context_window_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Messages */
+        get: operations["get_messages_assistant_v2__chat_id__messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/messages/{message_id}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Message */
+        post: operations["select_message_assistant_v2__chat_id__messages__message_id__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v3/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat V3 */
+        post: operations["chat_v3_assistant_v3_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v3/chat/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop V3 */
+        post: operations["stop_v3_assistant_v3_chat_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -11193,6 +11437,23 @@ export interface paths {
         get: operations["readiness_probe_health_readiness_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assistant/upload-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Assistant File */
+        post: operations["upload_assistant_file_v1_assistant_upload_file_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11263,6 +11524,42 @@ export interface components {
             organization_id?: string | null;
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
+        };
+        /**
+         * AccountSummaryDTO
+         * @description What an account approval covers at the moment it is shown.
+         */
+        AccountSummaryDTO: {
+            /** Project Count */
+            project_count: number;
+            /** Workspace Count */
+            workspace_count: number;
+        };
+        /**
+         * AccountWorkspaceBindingCreate
+         * @description An account folder: a local write root that belongs to no project
+         *     (`bridge_workspace_bindings.project_id` NULL). Registering one needs a
+         *     live account run consent on the device; bind_account_workspace refuses
+         *     it otherwise.
+         */
+        AccountWorkspaceBindingCreate: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /** AccountWorkspaceBindingDTO */
+        AccountWorkspaceBindingDTO: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
         };
         /** ActionDecision */
         ActionDecision: {
@@ -11344,8 +11641,19 @@ export interface components {
              * @description Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.
              */
             attachment_ids?: string[] | null;
+            /**
+             * Branch Document Id
+             * @description Opt into PDF-bound message branches; requires the streaming API.
+             */
+            branch_document_id?: string | null;
             /** Device Id */
             device_id?: string | null;
+            /**
+             * Document Only
+             * @description Answer from attached document context only. Disables agent tools and prevents fallback to project or organization retrieval.
+             * @default false
+             */
+            document_only: boolean;
             /**
              * Execution Provider
              * @default nous
@@ -11370,6 +11678,29 @@ export interface components {
              */
             model: "" | "model-router" | "gpt-5-mini" | "gpt-5.6-luna";
             page_context?: components["schemas"]["PageContextRequest"];
+            /**
+             * Page Filter Model
+             * @description Explicitly enable the configured Cohere PDF page filter for one attached document. Explicit page selection takes precedence.
+             */
+            page_filter_model?: "cohere" | null;
+            /**
+             * Parent Message Id
+             * @description Canonical branch parent; null starts a new root in a PDF-bound chat.
+             */
+            parent_message_id?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Per-turn answer reasoning override for document-only NOUS GPT-5 execution. Requires the configured Responses API. Null retains server defaults; supported values are low, medium, and high.
+             */
+            reasoning_effort?: ("low" | "medium" | "high") | null;
+            /**
+             * Selection Page Range
+             * @description Inclusive zero-based physical PDF page indices for a single attached document. Restricts attachment context to those pages; it is separate from automatic relevance ranking. Omitted on an unscoped follow-up.
+             */
+            selection_page_range?: [
+                number,
+                number
+            ] | null;
             /**
              * Supersedes Client Message Id
              * @description Edit-and-resend: the client_message_id of the USER turn being edited. The server tombstones that turn and everything after it in the thread atomically with persisting the new user turn, and drops the superseded messages from the LangGraph checkpoint. The edited turn itself must arrive as the normal last user message with a FRESH client_message_id — reusing the old one would be silently dropped by the ON CONFLICT dedup.
@@ -11414,6 +11745,222 @@ export interface components {
              * @description Optional acknowledgment note
              */
             note?: string | null;
+        };
+        /** AlphaXivChatRequest */
+        AlphaXivChatRequest: {
+            /** Assistantvariant */
+            assistantVariant?: string | null;
+            /** Customfilter */
+            customFilter?: {
+                [key: string]: unknown;
+            } | null;
+            /** Files */
+            files?: components["schemas"]["AlphaXivFileReference"][];
+            /**
+             * Filtermodel
+             * @description Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.
+             */
+            filterModel?: string | null;
+            /** Llmchatid */
+            llmChatId?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Model
+             * @description A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.
+             * @default
+             */
+            model: string;
+            /** Overviewid */
+            overviewId?: string | null;
+            /**
+             * Paperversionid
+             * Format: uuid
+             * @description An authorized NOUS document UUID
+             */
+            paperVersionId: string;
+            /** Parentmessageid */
+            parentMessageId?: string | null;
+            /**
+             * Protocol
+             * @default 2
+             * @constant
+             */
+            protocol: 2;
+            /**
+             * Selectionpagerange
+             * @description Inclusive zero-based PDF page indices
+             */
+            selectionPageRange?: [
+                number,
+                number
+            ] | null;
+            /** Thinking */
+            thinking?: unknown;
+            /** Websearch */
+            webSearch?: string | null;
+        };
+        /** AlphaXivChatSummary */
+        AlphaXivChatSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Newestmessage
+             * Format: date-time
+             */
+            newestMessage: string;
+            /** Title */
+            title: string | null;
+        };
+        /** AlphaXivContextWindowUsage */
+        AlphaXivContextWindowUsage: {
+            /** Contextwindow */
+            contextWindow: number;
+            /** Inputtokens */
+            inputTokens: number;
+        };
+        /** AlphaXivFileReference */
+        AlphaXivFileReference: {
+            /** Contenttype */
+            contentType: string;
+            /** Url */
+            url: string;
+        };
+        /** AlphaXivHistoryMessage */
+        AlphaXivHistoryMessage: {
+            /** Content */
+            content: string;
+            /** Feedbacktype */
+            feedbackType?: null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind?: string | null;
+            /** Parentmessageid */
+            parentMessageId: string | null;
+            /** Selectedat */
+            selectedAt: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "input_text" | "input_file" | "output_text" | "output_reasoning";
+        };
+        /** AlphaXivLiveAck */
+        AlphaXivLiveAck: {
+            /**
+             * Llmchatid
+             * Format: uuid
+             */
+            llmChatId: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+        };
+        /**
+         * AlphaXivLiveChatRequest
+         * @description The observed v3 request omits the v2 protocol selector.
+         */
+        AlphaXivLiveChatRequest: {
+            /** Assistantvariant */
+            assistantVariant?: string | null;
+            /** Customfilter */
+            customFilter?: {
+                [key: string]: unknown;
+            } | null;
+            /** Files */
+            files?: components["schemas"]["AlphaXivFileReference"][];
+            /**
+             * Filtermodel
+             * @description Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.
+             */
+            filterModel?: string | null;
+            /** Llmchatid */
+            llmChatId?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Model
+             * @description A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.
+             * @default
+             */
+            model: string;
+            /** Overviewid */
+            overviewId?: string | null;
+            /**
+             * Paperversionid
+             * Format: uuid
+             * @description An authorized NOUS document UUID
+             */
+            paperVersionId: string;
+            /** Parentmessageid */
+            parentMessageId?: string | null;
+            /**
+             * Selectionpagerange
+             * @description Inclusive zero-based PDF page indices
+             */
+            selectionPageRange?: [
+                number,
+                number
+            ] | null;
+            /** Thinking */
+            thinking?: unknown;
+            /** Websearch */
+            webSearch?: string | null;
+        };
+        /** AlphaXivSelectedMessage */
+        AlphaXivSelectedMessage: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Selectedat */
+            selectedAt: string;
+        };
+        /**
+         * AlphaXivSelection
+         * @description NOUS selection acknowledgement; the observed client ignores the body.
+         */
+        AlphaXivSelection: {
+            /** Selections */
+            selections: components["schemas"]["AlphaXivSelectedMessage"][];
+        };
+        /** AlphaXivStopRequest */
+        AlphaXivStopRequest: {
+            /**
+             * Llmchatid
+             * Format: uuid
+             */
+            llmChatId: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+        };
+        /** AlphaXivUploadResponse */
+        AlphaXivUploadResponse: {
+            data: components["schemas"]["AlphaXivUploadedFile"];
+        };
+        /** AlphaXivUploadedFile */
+        AlphaXivUploadedFile: {
+            /**
+             * Documentid
+             * Format: uuid
+             */
+            documentId: string;
+            processingStatus: components["schemas"]["ApiDocumentStatus"];
+            /** Url */
+            url: string;
         };
         /**
          * AnalyticsExportRequest
@@ -13077,14 +13624,23 @@ export interface components {
          * @description Paginated message list
          */
         ChatMessageListResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /** Has More */
             has_more: boolean;
             /** Limit */
             limit: number;
+            /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
             /** Messages */
             messages: components["schemas"]["ChatMessageResponse"][];
             /** Page */
             page: number;
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Total */
             total: number;
         };
@@ -13127,6 +13683,8 @@ export interface components {
             model_name?: string | null;
             /** Model Version */
             model_version?: string | null;
+            /** Parent Message Id */
+            parent_message_id?: string | null;
             /** Plan */
             plan?: {
                 [key: string]: unknown;
@@ -13141,6 +13699,8 @@ export interface components {
             reasoning_summary?: string | null;
             /** @default user */
             role: components["schemas"]["MessageRole-Output"];
+            /** Sibling User Message Ids */
+            sibling_user_message_ids?: string[];
             /** Stopped */
             stopped?: boolean | null;
             /**
@@ -14184,7 +14744,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "project" | "workspace";
+            kind: "project" | "workspace" | "account";
             /** Project Id */
             project_id: string | null;
             /** Project Label */
@@ -15136,8 +15696,13 @@ export interface components {
         /**
          * DeviceListItemDTO
          * @description A paired computer as the chat composer lists it.
+         *
+         *     All three lists come from the device's live run consents: consumed, not
+         *     revoked, holding harness:execute. The mint stays the authority.
          */
         DeviceListItemDTO: {
+            /** Account Wide */
+            account_wide: boolean;
             /** Bound Thread Ids */
             bound_thread_ids: string[];
             /**
@@ -15147,6 +15712,8 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Project Ids */
+            project_ids: string[];
         };
         /** DiffHunk */
         DiffHunk: {
@@ -16952,6 +17519,11 @@ export interface components {
         /** GrantRequestCreate */
         GrantRequestCreate: {
             /**
+             * Account
+             * @default false
+             */
+            account: boolean;
+            /**
              * Device Id
              * Format: uuid
              */
@@ -16967,8 +17539,14 @@ export interface components {
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
+            account_summary?: components["schemas"]["AccountSummaryDTO"] | null;
             /** Approval Url */
             approval_url: string;
+            /**
+             * Binding Kind
+             * @enum {string}
+             */
+            binding_kind: "project" | "workspace" | "account";
             /**
              * Device Id
              * Format: uuid
@@ -18557,6 +19135,64 @@ export interface components {
              */
             workspace_id?: string | null;
         };
+        /** PageFilterPriority */
+        PageFilterPriority: {
+            /** Page */
+            page: number;
+            /** Score */
+            score: number;
+        };
+        /**
+         * PageFilterResponse
+         * @description Bounded public projection; provider configuration never crosses the wire.
+         */
+        PageFilterResponse: {
+            /** Accepted Pages */
+            accepted_pages: number[];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Fallback
+             * @description Set when page ranking did not run or returned nothing and the context is a keyword excerpt of the whole document instead.
+             * @default null
+             */
+            fallback: ("disabled" | "provider_error" | "timeout" | "no_results" | "no_text" | "source_too_large") | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Priorities */
+            priorities?: components["schemas"]["PageFilterPriority"][];
+            /**
+             * Selection Page Range
+             * @default null
+             */
+            selection_page_range: [
+                number,
+                number
+            ] | null;
+            /** Short Circuited */
+            short_circuited: boolean;
+            /** @default null */
+            timing_ms: components["schemas"]["PageFilterTiming"] | null;
+            /** Total Pages */
+            total_pages: number;
+        };
+        /** PageFilterTiming */
+        PageFilterTiming: {
+            /** Average */
+            average: number;
+            /** Count */
+            count: number;
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+        };
         /**
          * PaginatedEntitiesResponse
          * @description Paginated response for entity listings
@@ -18587,6 +19223,53 @@ export interface components {
             total: number;
             /** Total Pages */
             total_pages: number;
+        };
+        /** PaperMetadata */
+        PaperMetadata: {
+            /** Abstract */
+            abstract: string;
+            /** Authors */
+            authors: string[];
+            /** Categories */
+            categories?: string[];
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Comment */
+            comment?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Id */
+            id: string;
+            /** Latest Id */
+            latest_id?: string | null;
+            /** Latest Withdrawn */
+            latest_withdrawn?: boolean | null;
+            /** Pdf Url */
+            pdf_url?: string | null;
+            /** Published */
+            published?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "arxiv_atom" | "arxiv_abstract_page" | "arxiv_atom+abstract_page";
+            /** Title */
+            title: string;
+            /** Updated */
+            updated?: string | null;
+            /**
+             * Withdrawn
+             * @description Null until this revision's withdrawal status is checked
+             */
+            withdrawn?: boolean | null;
+        };
+        /** PaperRequest */
+        PaperRequest: {
+            /** Paper Id */
+            paper_id: string;
         };
         /**
          * PendingReviewResponse
@@ -19630,6 +20313,18 @@ export interface components {
             queue_name: string;
         };
         /**
+         * RagContextPayload
+         * @description Cumulative SSE data; source rows retain their heterogeneous provenance.
+         */
+        RagContextPayload: {
+            /** Contexts */
+            contexts: {
+                [key: string]: unknown;
+            }[];
+            /** @default null */
+            page_filter: components["schemas"]["PageFilterResponse"] | null;
+        };
+        /**
          * RealTimeEvaluationRequest
          * @description Request for real-time evaluation
          */
@@ -19675,6 +20370,32 @@ export interface components {
             } | null;
             /** @default normal */
             frequency: components["schemas"]["UpdateFrequency"];
+        };
+        /** RecentImportRequest */
+        RecentImportRequest: {
+            /** Categories */
+            categories: string[];
+            /**
+             * Days
+             * @default 1
+             */
+            days: number;
+            /**
+             * Max Results
+             * @default 20
+             */
+            max_results: number;
+        };
+        /** RecentImportResponse */
+        RecentImportResponse: {
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status: "queued";
+            /** Task Id */
+            task_id: string;
         };
         /** ReferenceMapping */
         ReferenceMapping: {
@@ -23589,6 +24310,8 @@ export interface components {
          * @description Thread with messages
          */
         ThreadDetailResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /**
              * Conversation Id
              * Format: uuid
@@ -23614,6 +24337,11 @@ export interface components {
             /** Last Message Preview */
             last_message_preview?: string | null;
             /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
+            /**
              * Message Count
              * @default 0
              */
@@ -23623,6 +24351,8 @@ export interface components {
              * @default []
              */
             messages: components["schemas"]["ChatMessageResponse"][];
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Source Project Id */
             source_project_id?: string | null;
             /** @default active */
@@ -23659,6 +24389,8 @@ export interface components {
          * @description Thread response
          */
         ThreadResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /**
              * Conversation Id
              * Format: uuid
@@ -23684,10 +24416,17 @@ export interface components {
             /** Last Message Preview */
             last_message_preview?: string | null;
             /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
+            /**
              * Message Count
              * @default 0
              */
             message_count: number;
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Source Project Id */
             source_project_id?: string | null;
             /** @default active */
@@ -24316,7 +25055,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
-        /** WorkspaceBindingCreate */
+        /**
+         * WorkspaceBindingCreate
+         * @description A project folder: a local write root tied to one project. Account
+         *     folders are registered at /devices/{device_id}/account-workspaces.
+         */
         WorkspaceBindingCreate: {
             /** Label */
             label: string;
@@ -28460,6 +29203,132 @@ export interface operations {
             };
         };
     };
+    metadata_api_v1_arxiv_papers_metadata_get: {
+        parameters: {
+            query: {
+                paper_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperMetadata"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pdf_api_v1_arxiv_papers_pdf_get: {
+        parameters: {
+            query: {
+                paper_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recent_api_v1_arxiv_papers_recent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecentImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_api_v1_arxiv_papers_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperMetadata"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_arxiv_papers_api_v1_arxiv_search_post: {
         parameters: {
             query?: never;
@@ -31961,7 +32830,9 @@ export interface operations {
     };
     get_selected_context_api_v1_integrations_context_get: {
         parameters: {
-            query?: never;
+            query?: {
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -31975,6 +32846,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -32116,6 +32996,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountWorkspaceBindingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"];
                 };
             };
             /** @description Validation Error */
@@ -43988,6 +44934,37 @@ export interface operations {
             };
         };
     };
+    get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_messages_standalone_api_v2_threads__thread_id__messages_get: {
         parameters: {
             query?: {
@@ -43997,6 +44974,8 @@ export interface operations {
                 order?: string;
                 /** @description desc-order cursor: return only messages strictly OLDER than this message id. Ignored when order=asc. */
                 before_id?: string | null;
+                /** @description Pin continuation pages to the selected branch head; stale pins return 409. */
+                selected_message_id?: string | null;
             };
             header?: never;
             path: {
@@ -45002,6 +45981,8 @@ export interface operations {
             query?: {
                 page?: number;
                 limit?: number;
+                /** @description Pin continuation pages to the selected branch head; stale pins return 409. */
+                selected_message_id?: string | null;
             };
             header?: never;
             path: {
@@ -45402,6 +46383,230 @@ export interface operations {
             };
         };
     };
+    list_chats_assistant_v2_get: {
+        parameters: {
+            query: {
+                variant: "paper";
+                paperVersion: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivChatSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_v2_assistant_v2_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivChatRequest"];
+            };
+        };
+        responses: {
+            /** @description alphaXiv v2 SSE over a durable NOUS PDF chat */
+            200: {
+                headers: {
+                    "llm-chat-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    context_window_usage_assistant_v2__chat_id__context_window_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivContextWindowUsage"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_messages_assistant_v2__chat_id__messages_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivHistoryMessage"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_message_assistant_v2__chat_id__messages__message_id__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivSelection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_v3_assistant_v3_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivLiveChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivLiveAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_v3_assistant_v3_chat_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivStopRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_check_health_get: {
         parameters: {
             query?: never;
@@ -45438,6 +46643,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    upload_assistant_file_v1_assistant_upload_file_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Filename": string;
+                "Content-Type"?: string;
+                "Content-Length"?: number | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/pdf": string;
+                "text/markdown": string;
+                "text/plain": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

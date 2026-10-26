@@ -175,6 +175,70 @@
         "title": "APIKeyResponse",
         "type": "object"
       },
+      "AccountSummaryDTO": {
+        "description": "What an account approval covers at the moment it is shown.",
+        "properties": {
+          "project_count": {
+            "title": "Project Count",
+            "type": "integer"
+          },
+          "workspace_count": {
+            "title": "Workspace Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workspace_count",
+          "project_count"
+        ],
+        "title": "AccountSummaryDTO",
+        "type": "object"
+      },
+      "AccountWorkspaceBindingCreate": {
+        "additionalProperties": false,
+        "description": "An account folder: a local write root that belongs to no project\n(`bridge_workspace_bindings.project_id` NULL). Registering one needs a\nlive account run consent on the device; bind_account_workspace refuses\nit otherwise.",
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id"
+        ],
+        "title": "AccountWorkspaceBindingCreate",
+        "type": "object"
+      },
+      "AccountWorkspaceBindingDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id"
+        ],
+        "title": "AccountWorkspaceBindingDTO",
+        "type": "object"
+      },
       "ActionDecision": {
         "additionalProperties": false,
         "properties": {
@@ -415,6 +479,19 @@
             "description": "Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.",
             "title": "Attachment Ids"
           },
+          "branch_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opt into PDF-bound message branches; requires the streaming API.",
+            "title": "Branch Document Id"
+          },
           "device_id": {
             "anyOf": [
               {
@@ -426,6 +503,12 @@
               }
             ],
             "title": "Device Id"
+          },
+          "document_only": {
+            "default": false,
+            "description": "Answer from attached document context only. Disables agent tools and prevents fallback to project or organization retrieval.",
+            "title": "Document Only",
+            "type": "boolean"
           },
           "execution_provider": {
             "default": "nous",
@@ -479,6 +562,73 @@
           },
           "page_context": {
             "$ref": "#/components/schemas/PageContextRequest"
+          },
+          "page_filter_model": {
+            "anyOf": [
+              {
+                "const": "cohere",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Explicitly enable the configured Cohere PDF page filter for one attached document. Explicit page selection takes precedence.",
+            "title": "Page Filter Model"
+          },
+          "parent_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical branch parent; null starts a new root in a PDF-bound chat.",
+            "title": "Parent Message Id"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-turn answer reasoning override for document-only NOUS GPT-5 execution. Requires the configured Responses API. Null retains server defaults; supported values are low, medium, and high.",
+            "title": "Reasoning Effort"
+          },
+          "selection_page_range": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "minimum": 0.0,
+                    "type": "integer"
+                  },
+                  {
+                    "minimum": 0.0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive zero-based physical PDF page indices for a single attached document. Restricts attachment context to those pages; it is separate from automatic relevance ranking. Omitted on an unscoped follow-up.",
+            "title": "Selection Page Range"
           },
           "supersedes_client_message_id": {
             "anyOf": [
@@ -584,6 +734,565 @@
           }
         },
         "title": "AlertAcknowledgmentRequest",
+        "type": "object"
+      },
+      "AlphaXivChatRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "assistantVariant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistantvariant"
+          },
+          "customFilter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customfilter"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/AlphaXivFileReference"
+            },
+            "maxItems": 9,
+            "title": "Files",
+            "type": "array"
+          },
+          "filterModel": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.",
+            "title": "Filtermodel"
+          },
+          "llmChatId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llmchatid"
+          },
+          "message": {
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "description": "A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.",
+            "maxLength": 100,
+            "title": "Model",
+            "type": "string"
+          },
+          "overviewId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overviewid"
+          },
+          "paperVersionId": {
+            "description": "An authorized NOUS document UUID",
+            "format": "uuid",
+            "title": "Paperversionid",
+            "type": "string"
+          },
+          "parentMessageId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parentmessageid"
+          },
+          "protocol": {
+            "const": 2,
+            "default": 2,
+            "title": "Protocol",
+            "type": "integer"
+          },
+          "selectionPageRange": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive zero-based PDF page indices",
+            "title": "Selectionpagerange"
+          },
+          "thinking": {
+            "title": "Thinking"
+          },
+          "webSearch": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Websearch"
+          }
+        },
+        "required": [
+          "message",
+          "paperVersionId"
+        ],
+        "title": "AlphaXivChatRequest",
+        "type": "object"
+      },
+      "AlphaXivChatSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "newestMessage": {
+            "format": "date-time",
+            "title": "Newestmessage",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "newestMessage"
+        ],
+        "title": "AlphaXivChatSummary",
+        "type": "object"
+      },
+      "AlphaXivContextWindowUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "contextWindow": {
+            "exclusiveMinimum": 0.0,
+            "title": "Contextwindow",
+            "type": "integer"
+          },
+          "inputTokens": {
+            "minimum": 0.0,
+            "title": "Inputtokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inputTokens",
+          "contextWindow"
+        ],
+        "title": "AlphaXivContextWindowUsage",
+        "type": "object"
+      },
+      "AlphaXivFileReference": {
+        "additionalProperties": false,
+        "properties": {
+          "contentType": {
+            "maxLength": 100,
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contentType",
+          "url"
+        ],
+        "title": "AlphaXivFileReference",
+        "type": "object"
+      },
+      "AlphaXivHistoryMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "feedbackType": {
+            "title": "Feedbacktype",
+            "type": "null"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "parentMessageId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parentmessageid"
+          },
+          "selectedAt": {
+            "title": "Selectedat",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "input_text",
+              "input_file",
+              "output_text",
+              "output_reasoning"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parentMessageId",
+          "selectedAt",
+          "type",
+          "content"
+        ],
+        "title": "AlphaXivHistoryMessage",
+        "type": "object"
+      },
+      "AlphaXivLiveAck": {
+        "additionalProperties": false,
+        "properties": {
+          "llmChatId": {
+            "format": "uuid",
+            "title": "Llmchatid",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "llmChatId",
+          "runId"
+        ],
+        "title": "AlphaXivLiveAck",
+        "type": "object"
+      },
+      "AlphaXivLiveChatRequest": {
+        "additionalProperties": false,
+        "description": "The observed v3 request omits the v2 protocol selector.",
+        "properties": {
+          "assistantVariant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistantvariant"
+          },
+          "customFilter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customfilter"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/AlphaXivFileReference"
+            },
+            "maxItems": 9,
+            "title": "Files",
+            "type": "array"
+          },
+          "filterModel": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.",
+            "title": "Filtermodel"
+          },
+          "llmChatId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llmchatid"
+          },
+          "message": {
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "description": "A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.",
+            "maxLength": 100,
+            "title": "Model",
+            "type": "string"
+          },
+          "overviewId": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overviewid"
+          },
+          "paperVersionId": {
+            "description": "An authorized NOUS document UUID",
+            "format": "uuid",
+            "title": "Paperversionid",
+            "type": "string"
+          },
+          "parentMessageId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parentmessageid"
+          },
+          "selectionPageRange": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inclusive zero-based PDF page indices",
+            "title": "Selectionpagerange"
+          },
+          "thinking": {
+            "title": "Thinking"
+          },
+          "webSearch": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Websearch"
+          }
+        },
+        "required": [
+          "message",
+          "paperVersionId"
+        ],
+        "title": "AlphaXivLiveChatRequest",
+        "type": "object"
+      },
+      "AlphaXivSelectedMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "selectedAt": {
+            "title": "Selectedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "selectedAt"
+        ],
+        "title": "AlphaXivSelectedMessage",
+        "type": "object"
+      },
+      "AlphaXivSelection": {
+        "additionalProperties": false,
+        "description": "NOUS selection acknowledgement; the observed client ignores the body.",
+        "properties": {
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/AlphaXivSelectedMessage"
+            },
+            "title": "Selections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selections"
+        ],
+        "title": "AlphaXivSelection",
+        "type": "object"
+      },
+      "AlphaXivStopRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "llmChatId": {
+            "format": "uuid",
+            "title": "Llmchatid",
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "title": "Runid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "llmChatId",
+          "runId"
+        ],
+        "title": "AlphaXivStopRequest",
+        "type": "object"
+      },
+      "AlphaXivUploadResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AlphaXivUploadedFile"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "AlphaXivUploadResponse",
+        "type": "object"
+      },
+      "AlphaXivUploadedFile": {
+        "additionalProperties": false,
+        "properties": {
+          "documentId": {
+            "format": "uuid",
+            "title": "Documentid",
+            "type": "string"
+          },
+          "processingStatus": {
+            "$ref": "#/components/schemas/ApiDocumentStatus"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "documentId",
+          "processingStatus"
+        ],
+        "title": "AlphaXivUploadedFile",
         "type": "object"
       },
       "AnalyticsExportRequest": {
@@ -4576,6 +5285,18 @@
       "ChatMessageListResponse": {
         "description": "Paginated message list",
         "properties": {
+          "branch_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Document Id"
+          },
           "has_more": {
             "title": "Has More",
             "type": "boolean"
@@ -4583,6 +5304,11 @@
           "limit": {
             "title": "Limit",
             "type": "integer"
+          },
+          "message_branching": {
+            "default": false,
+            "title": "Message Branching",
+            "type": "boolean"
           },
           "messages": {
             "items": {
@@ -4594,6 +5320,18 @@
           "page": {
             "title": "Page",
             "type": "integer"
+          },
+          "selected_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Message Id"
           },
           "total": {
             "title": "Total",
@@ -4711,6 +5449,18 @@
             ],
             "title": "Model Version"
           },
+          "parent_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Message Id"
+          },
           "plan": {
             "anyOf": [
               {
@@ -4766,6 +5516,14 @@
           "role": {
             "$ref": "#/components/schemas/MessageRole-Output",
             "default": "user"
+          },
+          "sibling_user_message_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Sibling User Message Ids",
+            "type": "array"
           },
           "stopped": {
             "anyOf": [
@@ -7338,7 +8096,8 @@
           "kind": {
             "enum": [
               "project",
-              "workspace"
+              "workspace",
+              "account"
             ],
             "title": "Kind",
             "type": "string"
@@ -9525,8 +10284,12 @@
       },
       "DeviceListItemDTO": {
         "additionalProperties": false,
-        "description": "A paired computer as the chat composer lists it.",
+        "description": "A paired computer as the chat composer lists it.\n\nAll three lists come from the device's live run consents: consumed, not\nrevoked, holding harness:execute. The mint stays the authority.",
         "properties": {
+          "account_wide": {
+            "title": "Account Wide",
+            "type": "boolean"
+          },
           "bound_thread_ids": {
             "items": {
               "format": "uuid",
@@ -9545,12 +10308,22 @@
             "minLength": 1,
             "title": "Label",
             "type": "string"
+          },
+          "project_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Project Ids",
+            "type": "array"
           }
         },
         "required": [
           "label",
           "id",
-          "bound_thread_ids"
+          "bound_thread_ids",
+          "account_wide",
+          "project_ids"
         ],
         "title": "DeviceListItemDTO",
         "type": "object"
@@ -13845,6 +14618,11 @@
       "GrantRequestCreate": {
         "additionalProperties": false,
         "properties": {
+          "account": {
+            "default": false,
+            "title": "Account",
+            "type": "boolean"
+          },
           "device_id": {
             "format": "uuid",
             "title": "Device Id",
@@ -13904,8 +14682,27 @@
       },
       "GrantRequestDTO": {
         "properties": {
+          "account_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountSummaryDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "approval_url": {
             "title": "Approval Url",
+            "type": "string"
+          },
+          "binding_kind": {
+            "enum": [
+              "project",
+              "workspace",
+              "account"
+            ],
+            "title": "Binding Kind",
             "type": "string"
           },
           "device_id": {
@@ -14021,6 +14818,7 @@
           "status",
           "expires_at",
           "approval_url",
+          "binding_kind",
           "project_id",
           "device_id",
           "scopes",
@@ -17410,6 +18208,170 @@
         "title": "PageContextRequest",
         "type": "object"
       },
+      "PageFilterPriority": {
+        "properties": {
+          "page": {
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "page",
+          "score"
+        ],
+        "title": "PageFilterPriority",
+        "type": "object"
+      },
+      "PageFilterResponse": {
+        "description": "Bounded public projection; provider configuration never crosses the wire.",
+        "properties": {
+          "accepted_pages": {
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 100,
+            "title": "Accepted Pages",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "fallback": {
+            "anyOf": [
+              {
+                "enum": [
+                  "disabled",
+                  "provider_error",
+                  "timeout",
+                  "no_results",
+                  "no_text",
+                  "source_too_large"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when page ranking did not run or returned nothing and the context is a keyword excerpt of the whole document instead.",
+            "title": "Fallback"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "priorities": {
+            "items": {
+              "$ref": "#/components/schemas/PageFilterPriority"
+            },
+            "maxItems": 100,
+            "title": "Priorities",
+            "type": "array"
+          },
+          "selection_page_range": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Selection Page Range"
+          },
+          "short_circuited": {
+            "title": "Short Circuited",
+            "type": "boolean"
+          },
+          "timing_ms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PageFilterTiming"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "total_pages": {
+            "minimum": 0,
+            "title": "Total Pages",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id",
+          "accepted_pages",
+          "total_pages",
+          "short_circuited"
+        ],
+        "title": "PageFilterResponse",
+        "type": "object"
+      },
+      "PageFilterTiming": {
+        "properties": {
+          "average": {
+            "minimum": 0,
+            "title": "Average",
+            "type": "number"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "max": {
+            "minimum": 0,
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "minimum": 0,
+            "title": "Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "average",
+          "min",
+          "max",
+          "count"
+        ],
+        "title": "PageFilterTiming",
+        "type": "object"
+      },
       "PaginatedEntitiesResponse": {
         "description": "Paginated response for entity listings",
         "properties": {
@@ -17483,6 +18445,165 @@
           "has_prev"
         ],
         "title": "PaginationInfo",
+        "type": "object"
+      },
+      "PaperMetadata": {
+        "properties": {
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Id"
+          },
+          "latest_withdrawn": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Withdrawn"
+          },
+          "pdf_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Url"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published"
+          },
+          "source": {
+            "enum": [
+              "arxiv_atom",
+              "arxiv_abstract_page",
+              "arxiv_atom+abstract_page"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated"
+          },
+          "withdrawn": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until this revision's withdrawal status is checked",
+            "title": "Withdrawn"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "authors",
+          "abstract",
+          "source",
+          "checked_at"
+        ],
+        "title": "PaperMetadata",
+        "type": "object"
+      },
+      "PaperRequest": {
+        "properties": {
+          "paper_id": {
+            "maxLength": 64,
+            "title": "Paper Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paper_id"
+        ],
+        "title": "PaperRequest",
         "type": "object"
       },
       "PendingReviewResponse": {
@@ -20065,6 +21186,35 @@
         "title": "QueueStatsResponse",
         "type": "object"
       },
+      "RagContextPayload": {
+        "description": "Cumulative SSE data; source rows retain their heterogeneous provenance.",
+        "properties": {
+          "contexts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Contexts",
+            "type": "array"
+          },
+          "page_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PageFilterResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "contexts"
+        ],
+        "title": "RagContextPayload",
+        "type": "object"
+      },
       "RealTimeEvaluationRequest": {
         "description": "Request for real-time evaluation",
         "properties": {
@@ -20145,6 +21295,59 @@
           "document_id"
         ],
         "title": "RealtimeStatusSubscription",
+        "type": "object"
+      },
+      "RecentImportRequest": {
+        "properties": {
+          "categories": {
+            "items": {
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9-]*(?:\\.[A-Za-z][A-Za-z0-9-]*)?$",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Categories",
+            "type": "array"
+          },
+          "days": {
+            "default": 1,
+            "maximum": 7.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "max_results": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "categories"
+        ],
+        "title": "RecentImportRequest",
+        "type": "object"
+      },
+      "RecentImportResponse": {
+        "properties": {
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "RecentImportResponse",
         "type": "object"
       },
       "ReferenceMapping": {
@@ -29245,6 +30448,18 @@
       "ThreadDetailResponse": {
         "description": "Thread with messages",
         "properties": {
+          "branch_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Document Id"
+          },
           "conversation_id": {
             "format": "uuid",
             "title": "Conversation Id",
@@ -29288,6 +30503,11 @@
             ],
             "title": "Last Message Preview"
           },
+          "message_branching": {
+            "default": false,
+            "title": "Message Branching",
+            "type": "boolean"
+          },
           "message_count": {
             "default": 0,
             "title": "Message Count",
@@ -29300,6 +30520,18 @@
             },
             "title": "Messages",
             "type": "array"
+          },
+          "selected_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Message Id"
           },
           "source_project_id": {
             "anyOf": [
@@ -29390,6 +30622,18 @@
       "ThreadResponse": {
         "description": "Thread response",
         "properties": {
+          "branch_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Document Id"
+          },
           "conversation_id": {
             "format": "uuid",
             "title": "Conversation Id",
@@ -29433,10 +30677,27 @@
             ],
             "title": "Last Message Preview"
           },
+          "message_branching": {
+            "default": false,
+            "title": "Message Branching",
+            "type": "boolean"
+          },
           "message_count": {
             "default": 0,
             "title": "Message Count",
             "type": "integer"
+          },
+          "selected_message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Message Id"
           },
           "source_project_id": {
             "anyOf": [
@@ -30962,6 +32223,7 @@
       },
       "WorkspaceBindingCreate": {
         "additionalProperties": false,
+        "description": "A project folder: a local write root tied to one project. Account\nfolders are registered at /devices/{device_id}/account-workspaces.",
         "properties": {
           "label": {
             "maxLength": 120,
@@ -33593,7 +34855,12 @@
         "summary": "Stream Agent",
         "tags": [
           "agent"
-        ]
+        ],
+        "x-sse-data-schemas": {
+          "rag_context": {
+            "$ref": "#/components/schemas/RagContextPayload"
+          }
+        }
       }
     },
     "/api/v1/agent/stream/cancel/{thread_id}": {
@@ -33739,7 +35006,12 @@
         "summary": "Stream Confirm Agent",
         "tags": [
           "agent"
-        ]
+        ],
+        "x-sse-data-schemas": {
+          "rag_context": {
+            "$ref": "#/components/schemas/RagContextPayload"
+          }
+        }
       }
     },
     "/api/v1/agent/stream/resume/{thread_id}": {
@@ -38358,6 +39630,187 @@
           }
         ],
         "summary": "Process Batch Local Papers"
+      }
+    },
+    "/api/v1/arxiv/papers/metadata": {
+      "get": {
+        "operationId": "metadata_api_v1_arxiv_papers_metadata_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "paper_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "title": "Paper Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Metadata",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/pdf": {
+      "get": {
+        "operationId": "pdf_api_v1_arxiv_papers_pdf_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "paper_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "title": "Paper Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pdf",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/recent": {
+      "post": {
+        "operationId": "recent_api_v1_arxiv_papers_recent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecentImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Recent",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/sync": {
+      "post": {
+        "operationId": "sync_api_v1_arxiv_papers_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync",
+        "tags": [
+          "arxiv-papers"
+        ]
       }
     },
     "/api/v1/arxiv/search": {
@@ -44510,6 +45963,20 @@
     "/api/v1/integrations/context": {
       "get": {
         "operationId": "get_selected_context_api_v1_integrations_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 25,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -44520,6 +45987,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -44751,6 +46228,116 @@
         ]
       }
     },
+    "/api/v1/integrations/devices/{device_id}/account-workspaces": {
+      "get": {
+        "description": "The device's account folders, while its account approval lives;\nempty otherwise.",
+        "operationId": "get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountWorkspaceBindingDTO"
+                  },
+                  "title": "Response Get Account Workspace Bindings Api V1 Integrations Devices  Device Id  Account Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Account Workspace Bindings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "description": "Register an account folder: needs a live account approval of this\ndevice that can run Codex (403 otherwise).",
+        "operationId": "create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountWorkspaceBindingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountWorkspaceBindingDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Account Workspace Binding",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/devices/{device_id}/revoke": {
       "post": {
         "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoke the old consent rather than disconnecting the old device, which would end every CLI sign-in again; the old device then stays listed with no access. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
@@ -44799,6 +46386,7 @@
     },
     "/api/v1/integrations/devices/{device_id}/workspaces": {
       "get": {
+        "description": "The device's project folders. Account folders are listed by\nGET /devices/{device_id}/account-workspaces.",
         "operationId": "get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get",
         "parameters": [
           {
@@ -46870,7 +48458,7 @@
     },
     "/api/v1/knowledge-graph/schema/reset": {
       "post": {
-        "description": "Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).\n\nDeletes every Entity node owned by the caller's organization (and, via\nDETACH DELETE, their relationships). Global schema constraints/indexes are\n(idempotently) re-ensured.",
+        "description": "Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).\n\nDeletes every Entity node owned by the caller's organization (and, via\nDETACH DELETE, their relationships). Deleting nodes does not drop the\nglobal constraints/indexes; those are owned by the startup bootstrap\n(``_connect`` → ``_maybe_ensure_schema``, retried from ``get_session``),\nso a tenant request must not re-run that global DDL.",
         "operationId": "reset_graph_schema_api_v1_knowledge_graph_schema_reset_post",
         "parameters": [
           {
@@ -60941,7 +62529,7 @@
     },
     "/api/v1/search/indexes/rebuild": {
       "post": {
-        "description": "Rebuild full-text search indexes (admin only)",
+        "description": "Rebuild full-text search vectors for the caller's organization (admin only)\n\nIndex DDL is deployment-owned (Alembic ``p3q4r5s6t7u8`` creates the GIN\nindex on ``documents.search_vector``); a tenant admin's request must not\nrun ``CREATE INDEX`` against the shared ``documents`` table. This endpoint\nonly recomputes ``search_vector`` for the caller's organization.",
         "operationId": "rebuild_search_indexes_api_v1_search_indexes_rebuild_post",
         "responses": {
           "200": {
@@ -65183,7 +66771,7 @@
     },
     "/api/v2/threads/{thread_id}/handoff": {
       "get": {
-        "description": "Latest harness handoff left in this chat (standalone route).",
+        "description": "Preserve the original object-or-404 contract for existing clients.",
         "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
         "parameters": [
           {
@@ -65225,6 +66813,63 @@
           }
         ],
         "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+      "get": {
+        "description": "Latest handoff, or null for an authorized chat without one.",
+        "operationId": "get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandoffDTO"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Latest Thread Handoff Api V2 Threads  Thread Id  Handoff Latest Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Latest Thread Handoff",
         "tags": [
           "workspaces-flat"
         ]
@@ -65298,6 +66943,25 @@
               ],
               "description": "desc-order cursor: return only messages strictly OLDER than this message id. Ignored when order=asc.",
               "title": "Before Id"
+            }
+          },
+          {
+            "description": "Pin continuation pages to the selected branch head; stale pins return 409.",
+            "in": "query",
+            "name": "selected_message_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pin continuation pages to the selected branch head; stale pins return 409.",
+              "title": "Selected Message Id"
             }
           }
         ],
@@ -67180,6 +68844,25 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Pin continuation pages to the selected branch head; stale pins return 409.",
+            "in": "query",
+            "name": "selected_message_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pin continuation pages to the selected branch head; stale pins return 409.",
+              "title": "Selected Message Id"
+            }
           }
         ],
         "responses": {
@@ -67866,6 +69549,379 @@
         ]
       }
     },
+    "/assistant/v2": {
+      "get": {
+        "operationId": "list_chats_assistant_v2_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "variant",
+            "required": true,
+            "schema": {
+              "const": "paper",
+              "title": "Variant",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "paperVersion",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Paperversion",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlphaXivChatSummary"
+                  },
+                  "title": "Response List Chats Assistant V2 Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Chats",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v2/chat": {
+      "post": {
+        "operationId": "chat_v2_assistant_v2_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlphaXivChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "alphaXiv v2 SSE over a durable NOUS PDF chat",
+            "headers": {
+              "llm-chat-id": {
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chat V2",
+        "tags": [
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v2/{chat_id}/context-window-usage": {
+      "get": {
+        "operationId": "context_window_usage_assistant_v2__chat_id__context_window_usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AlphaXivContextWindowUsage"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Context Window Usage Assistant V2  Chat Id  Context Window Usage Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Context Window Usage",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v2/{chat_id}/messages": {
+      "get": {
+        "operationId": "get_messages_assistant_v2__chat_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlphaXivHistoryMessage"
+                  },
+                  "title": "Response Get Messages Assistant V2  Chat Id  Messages Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Messages",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v2/{chat_id}/messages/{message_id}/select": {
+      "post": {
+        "operationId": "select_message_assistant_v2__chat_id__messages__message_id__select_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlphaXivSelection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Select Message",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v3/chat": {
+      "post": {
+        "operationId": "chat_v3_assistant_v3_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlphaXivLiveChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlphaXivLiveAck"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chat V3",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
+    "/assistant/v3/chat/stop": {
+      "post": {
+        "operationId": "stop_v3_assistant_v3_chat_stop_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlphaXivStopRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stop V3",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "description": "Health check endpoint",
@@ -67900,6 +69956,106 @@
         "summary": "Readiness Probe",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/assistant/upload-file": {
+      "post": {
+        "operationId": "upload_assistant_file_v1_assistant_upload_file_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Filename",
+            "required": true,
+            "schema": {
+              "maxLength": 4500,
+              "title": "X-Filename",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Content-Type",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Content-Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Content-Length",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content-Length"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/pdf": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "text/markdown": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlphaXivUploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Assistant File",
+        "tags": [
+          "alphaXiv compatibility",
+          "alphaXiv compatibility"
         ]
       }
     }

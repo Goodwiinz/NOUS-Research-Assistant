@@ -1,24 +1,25 @@
 # Minimal Backend Requirements for Phase 1 Validation
 
 # Core Framework
-fastapi==0.141.1
+fastapi==0.143.3
 starlette>=1.3.1
-uvicorn[standard]==0.52.4
-pydantic==2.13.5
-pydantic-settings==2.15.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.0
 jsonschema==4.26.0
+beautifulsoup4==4.15.0
 
 # Database
-sqlalchemy==2.0.52
+sqlalchemy==2.1.5
 greenlet>=3.0.0
 alembic==1.20.0
-asyncpg==0.31.0
+asyncpg==0.32.0
 psycopg2-binary==2.9.13
 pgvector==0.5.1
 
 # Authentication & Security
 python-jose[cryptography]==3.5.0
-cryptography>=50.0.0
+cryptography>=50.0.2
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.32
 PyJWT>=2.13.0  # CVE-2026-48526 (GHSA-xgmm-8j9v-c9wx)
@@ -28,15 +29,15 @@ celery==5.6.3
 redis==5.0.1
 
 # Vector Database (using compatible versions with pre-built wheels)
-qdrant-client==1.19.0
+qdrant-client==1.19.1
 numpy<2
 
 # Knowledge Graph
-neo4j==6.3.0
+neo4j==6.4.1
 
 # Basic File Processing
 PyMuPDF==1.28.2
-Pillow>=12.2.0
+Pillow>=12.3.0
 python-magic==0.4.27
 aiofiles==23.2.1
 
@@ -45,12 +46,12 @@ httpx==0.28.1
 aiohttp>=3.13.3
 
 # Configuration
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 
 # Development
-pytest>=9.0.3
+pytest>=9.1.1
 pytest-asyncio==1.4.0
-black==26.5.1
+black==26.10.1
 isort==5.12.0
 
 # Monitoring
@@ -59,7 +60,7 @@ prometheus-client==0.26.0
 # Utilities
 click==8.5.0
 rich==13.7.0
-typer==0.27.2
+typer==0.27.3
 
 # Testing
 pytest-cov==7.1.0

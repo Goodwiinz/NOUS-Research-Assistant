@@ -289,3 +289,32 @@ async def test_citation_graph_document_anchor_uses_the_shared_boundary(
     else:
         assert f"documents.organization_id = '{ORG.hex}'" in where.replace("-", "")
         assert "documents.is_deleted IS false" in where
+
+
+@pytest.mark.asyncio
+async def test_list_citations_message_branch_excludes_document_citations() -> None:
+    """Owning the message must not list a citation whose document is foreign or
+    soft-deleted: the message branch only admits documentless citations, the
+    same rule as ``_citation_is_accessible``."""
+    user = _user()
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar = Mock(return_value=0)
+    result.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result)
+
+    await cit.list_citations(
+        message_id=None,
+        document_id=None,
+        arxiv_id=None,
+        doi=None,
+        needs_review=None,
+        skip=0,
+        limit=50,
+        current_user=user,
+        db=db,
+    )
+    for call in db.execute.call_args_list:
+        sql = _sql(call.args[0])
+        message_branch = sql[sql.index("chat_messages.is_deleted") - 200 :]
+        assert "citations.document_id IS NULL" in message_branch

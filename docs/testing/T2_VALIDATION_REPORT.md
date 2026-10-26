@@ -1,5 +1,7 @@
 # T2 Validation Report
 
+> **Stale (2026-10-17): a dated T2 report. Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. The backend paths it cites (for example `backend/src/api/search.py`) have since been reorganised, and its results are not current status.**
+
 ## Summary
 
 This report provides a comprehensive validation of all implemented T2 tasks in the Multimodal Enterprise RAG System. The validation covers syntax checks, import tests, service instantiation, and database connectivity.

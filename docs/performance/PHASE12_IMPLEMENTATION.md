@@ -1,4 +1,7 @@
 # Phase 12: Performance Optimization Implementation
+
+> **Stale (2026-10-17): Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Measurements and file paths below describe the system when the document was written and are not current performance evidence.**
+
 ## Complete Performance Optimization System for Knowledge Graph Analytics Dashboard
 
 This document provides a comprehensive overview of the Phase 12 implementation of the performance optimization system for the Multimodal Enterprise RAG System.

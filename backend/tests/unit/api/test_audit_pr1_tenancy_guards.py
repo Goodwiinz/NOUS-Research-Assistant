@@ -163,8 +163,13 @@ def test_delete_relationship_signature_and_scope() -> None:
 
 def test_analytics_route_passes_organization_id() -> None:
     source = (BACKEND_ROOT / "src/api/search/knowledge_graph.py").read_text()
-    call = source[source.find("knowledge_graph_service.get_graph_analytics") :]
-    assert "organization_id=str(current_user.organization_id)" in call[:800]
+    route = source[source.find("def get_graph_analytics(") :]
+    # The org is resolved by the fail-closed guard (403 for an org-less
+    # caller) before any scoping/service work, then forwarded as-is.
+    assert "org_id = _require_org_id(current_user)" in route[:600]
+    assert route.find("_require_org_id(current_user)") < route.find("try:")
+    call = route[route.find("knowledge_graph_service.get_graph_analytics") :]
+    assert "organization_id=org_id" in call[:800]
     # F2: the doc-id list is only supplied for an explicit ?project_id= filter,
     # where it NARROWS the org counts instead of replacing them.
     assert (

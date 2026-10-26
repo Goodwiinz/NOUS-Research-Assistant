@@ -1,5 +1,7 @@
 # Production Monitoring Service Architecture
 
+> **Stale / historical (2026-10-17):** It is a design document for a subsystem; the described service layout may not match the current code. Verify against `backend/src/` and `backend/openapi.json` before relying on it. Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 ## Service Boundaries and Responsibilities
 
 ### 1. Observability Manager Service

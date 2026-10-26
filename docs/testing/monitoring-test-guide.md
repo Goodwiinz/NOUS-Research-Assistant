@@ -1,5 +1,7 @@
 # Monitoring System Testing Guide
 
+> **Stale (2026-10-17): this guide predates the current layout. Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. It cites `frontend/package-lock.json` and other files that do not exist, and uses `npm`; the repository uses `pnpm` with a single root `pnpm-lock.yaml`.**
+
 ## Overview
 
 This guide provides comprehensive documentation for the monitoring system test suite, covering integration tests, E2E tests, performance validation, and accessibility testing for the Multimodal Enterprise RAG System monitoring implementation.

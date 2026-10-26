@@ -282,6 +282,10 @@ describe('per-thread newest-page coordinator', () => {
       useChatStore.getState().messages['thread-a'].map((message) => message.id)
     ).toEqual(['m1', 'm2', 'm3', 'm4']);
     expect(useChatStore.getState().messagePagination['thread-a']).toEqual({
+      message_branching: false,
+      branch_document_id: null,
+      selected_message_id: null,
+      selectingBranch: undefined,
       hasMore: true,
       loadingOlder: false,
       loadedCount: 4,

@@ -107,8 +107,12 @@ async def _grant_context(
     context = await resolve_integration_context(
         db, token, required_scope="harness:execute"
     )
-    # Harness runs stay bound to one Collection; refuse a workspace grant.
-    if context.project_id is None or str(context.user_id) != str(identity.get("sub")):
+    # A run needs one Collection: a project grant names it; an account pairing
+    # grant takes each run's own (delivery._authorize). A workspace grant never
+    # runs Codex.
+    if context.binding_kind not in ("project", "account") or str(
+        context.user_id
+    ) != str(identity.get("sub")):
         raise IntegrationAccessDenied()
     return context
 
@@ -168,7 +172,7 @@ async def connect(websocket: WebSocket) -> None:
                     for command in commands:
                         await websocket.send_json(
                             {
-                                "commands": [command.model_dump(mode="json")],
+                                "commands": [command.wire()],
                                 "lease": lease,
                             }
                         )

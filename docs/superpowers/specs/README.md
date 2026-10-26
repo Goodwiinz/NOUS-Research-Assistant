@@ -18,3 +18,4 @@ Design and scope decisions for proposed changes. These records explain the agree
 | [2026-09-14-invalid-patterns-agent-guidance-design.md](2026-09-14-invalid-patterns-agent-guidance-design.md) | Invalid-pattern audit and agent-guidance design |
 | [2026-09-17-nous-workflow-qa-design.md](2026-09-17-nous-workflow-qa-design.md) | NOUS workflow QA CLI design |
 | [2026-09-27-daily-research-brief-design.md](2026-09-27-daily-research-brief-design.md) | Daily Research Brief workflow design |
+| [2026-10-09-rich-context-workflows-design.md](2026-10-09-rich-context-workflows-design.md) | Rich conversation context and bounded NOUS workflows |

@@ -61,9 +61,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "7fbd027ce9f9b7a222c4038edf7ea321416a86dd"
-    digest: "sha256:263a39bfbf68686e9f6a639fef8ccc9ec2d6da02c67cf9a92ffc77c4392a33b1"
-    sourceSha: "7fbd027ce9f9b7a222c4038edf7ea321416a86dd"
+    tag: "9c271df22e1eff4ff3c2b8f1af45483ecf3cc121"
+    digest: "sha256:a8fcee7ba00a0bb7c9ab2a7362f30b325b4abeb582a1d09828c6b041130e96a3"
+    sourceSha: "9c271df22e1eff4ff3c2b8f1af45483ecf3cc121"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -188,6 +188,11 @@ backend:
     - name: HARNESS_BRIDGE_ENABLED
       value: "true"
     - name: NOUS_MCP_ENABLED
+      value: "true"
+    # Whole-account approvals for `nous --rc` (docs/engineering/harness-bridge.md):
+    # default-off in code. Off blocks new account approval requests (503);
+    # existing ones keep working until revoked under Connected devices.
+    - name: ACCOUNT_CONNECTIONS_ENABLED
       value: "true"
     # Phase 1 of docs/testing/harness-live-proof.md keeps artifact
     # publication off; Phase 2 sets it to "true".

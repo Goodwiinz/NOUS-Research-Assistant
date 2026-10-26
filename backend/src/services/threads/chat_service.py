@@ -62,6 +62,7 @@ from src.services.threads import (
     workspace_access,
     workspace_service,
 )
+from src.services.threads.branch_reads import MessagePageMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -344,11 +345,24 @@ class ChatService:
         return thread
 
     async def get_thread(
-        self, thread_id: UUID, user_id: UUID, include_messages: bool = False
+        self,
+        thread_id: UUID,
+        user_id: UUID,
+        include_messages: bool = False,
+        *,
+        authorize_bound_document: bool = False,
     ) -> Optional[Thread]:
         """Get thread by ID."""
+        if include_messages:
+            return await thread_service.get_thread_detail(
+                self.db, thread_id, user_id, include_messages=True
+            )
         return await workspace_access.get_thread(
-            self.db, thread_id, user_id, include_messages=include_messages
+            self.db,
+            thread_id,
+            user_id,
+            include_messages=include_messages,
+            authorize_bound_document=authorize_bound_document,
         )
 
     async def list_threads(
@@ -664,6 +678,15 @@ class ChatService:
     # Message Operations
     # =========================================================================
 
+    async def _lock_linear_thread(self, thread_id: UUID) -> bool:
+        """Serialize ordinary writers with atomic PDF branch opt-in."""
+        branching = await self.db.scalar(
+            select(Thread.message_branching)
+            .where(Thread.id == thread_id, Thread.is_deleted.is_(False))
+            .with_for_update(of=Thread)
+        )
+        return branching is not None and branching is not True
+
     async def create_message(
         self, data: ChatMessageCreate, user_id: UUID
     ) -> Optional[ChatMessage]:
@@ -675,6 +698,8 @@ class ChatService:
 
         # Check edit permission
         if not thread.conversation.workspace.can_user_edit(str(user_id)):
+            return None
+        if not await self._lock_linear_thread(data.thread_id):
             return None
 
         # Count tokens for the message using fast estimation to avoid blocking
@@ -826,6 +851,8 @@ class ChatService:
         citations: Optional[List[dict]] = None,
     ) -> Optional[ChatMessage]:
         """Create an assistant message with optional citations"""
+        if not await self._lock_linear_thread(thread_id):
+            return None
         message = ChatMessage.create_assistant_message(
             thread_id=str(thread_id),
             content=content,
@@ -919,7 +946,7 @@ class ChatService:
         self, message_id: UUID, user_id: UUID
     ) -> Optional[ChatMessage]:
         """Get message by ID."""
-        return await workspace_access.get_message(self.db, message_id, user_id)
+        return await message_service.get_message(self.db, message_id, user_id)
 
     async def list_messages(
         self,
@@ -930,6 +957,8 @@ class ChatService:
         before_id: Optional[UUID] = None,
         since: Optional[datetime] = None,
         order: Literal["asc", "desc"] = "asc",
+        selected_message_id: Optional[UUID] = None,
+        branch_metadata: Optional["MessagePageMetadata"] = None,
     ) -> Tuple[List[ChatMessage], int]:
         """List messages in a thread.
 
@@ -952,6 +981,8 @@ class ChatService:
             before_id=before_id,
             since=since,
             order=order,
+            selected_message_id=selected_message_id,
+            branch_metadata=branch_metadata,
         )
         if result is None:
             return [], 0

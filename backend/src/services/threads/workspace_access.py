@@ -39,7 +39,7 @@ from uuid import UUID
 
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import contains_eager, selectinload
 
 from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
@@ -153,6 +153,18 @@ def member_or_owner_workspace_clause(user_id: UUID) -> ColumnElement[bool]:
     )
 
 
+def accessible_workspace_clause(user_id: UUID) -> ColumnElement[bool]:
+    """SQL twin of ``user_can_access_workspace`` for a read by id.
+
+    Live, then public OR owner OR live member. The listing twin above
+    deliberately leaves unjoined public workspaces out; a read by id lets them
+    in, exactly as the Python predicate does.
+    """
+    return member_or_owner_workspace_clause(user_id) | (
+        (Workspace.is_deleted == False) & (Workspace.is_public == True)  # noqa: E712
+    )
+
+
 async def get_workspace(
     db: AsyncSession,
     workspace_id: UUID,
@@ -252,6 +264,7 @@ async def get_thread(
     conversation_id: Optional[UUID] = None,
     workspace_id: Optional[UUID] = None,
     include_messages: bool = True,
+    authorize_bound_document: bool = False,
 ) -> Optional[Thread]:
     """Fetch a thread the caller can access, or ``None``.
 
@@ -271,7 +284,12 @@ async def get_thread(
     if include_messages:
         options.append(selectinload(Thread.messages))
 
-    stmt = select(Thread).options(*options).where(*conditions)
+    stmt = (
+        select(Thread)
+        .options(*options)
+        .where(*conditions)
+        .execution_options(populate_existing=True)
+    )
     result = await db.execute(stmt)
     thread: Optional[Thread] = result.scalars().first()
     if not thread:
@@ -287,6 +305,54 @@ async def get_thread(
         return None
     if not user_can_access_workspace(conversation.workspace, user_id):
         return None
+    if authorize_bound_document and thread.message_branching is True:
+        from src.services.threads.message_branches import (
+            BranchAccessError,
+            authorize_branch_document_read,
+        )
+
+        try:
+            await authorize_branch_document_read(
+                db, actor_id=user_id, document_id=thread.branch_document_id
+            )
+        except BranchAccessError:
+            return None
+    return thread
+
+
+async def get_thread_lean(
+    db: AsyncSession, thread_id: UUID, user_id: UUID
+) -> Optional[Thread]:
+    """``get_thread(..., include_messages=False)`` in one SELECT, for polled reads.
+
+    Same answer as ``get_thread``: a live thread under a live conversation and
+    a live workspace the caller can access (``accessible_workspace_clause``).
+    ``thread.conversation.workspace`` is loaded with its columns; workspace
+    members, owner and thread messages are NOT, and touching them on the
+    result lazy-loads, which an async session refuses. Use ``get_thread`` for
+    a caller that needs any of them. In particular, never feed the result's
+    workspace to ``user_can_access_workspace`` or ``workspace_trust``, nor the
+    thread to ``thread_viewer_is_trusted``: all three read ``workspace.members``
+    (via ``Workspace.is_member``), which is not loaded here. The first two
+    would raise ``MissingGreenlet``; the third would fail closed to the public
+    projection.
+    """
+    stmt = (
+        select(Thread)
+        .join(Conversation, Conversation.id == Thread.conversation_id)
+        .join(Workspace, Workspace.id == Conversation.workspace_id)
+        .options(
+            contains_eager(Thread.conversation).contains_eager(Conversation.workspace)
+        )
+        .where(
+            Thread.id == thread_id,
+            Thread.is_deleted == False,  # noqa: E712
+            Conversation.is_deleted == False,  # noqa: E712
+            accessible_workspace_clause(user_id),
+        )
+    )
+    result = await db.execute(stmt)
+    thread: Optional[Thread] = result.scalars().first()
     return thread
 
 
@@ -298,6 +364,7 @@ async def get_message(
     thread_id: Optional[UUID] = None,
     conversation_id: Optional[UUID] = None,
     workspace_id: Optional[UUID] = None,
+    authorize_bound_document: bool = False,
 ) -> Optional[ChatMessage]:
     """Fetch a message the caller can access, or ``None``.
 
@@ -339,6 +406,7 @@ async def get_message(
             .selectinload(Workspace.members),
         )
         .where(*conditions)
+        .execution_options(populate_existing=True)
     )
     result = await db.execute(stmt)
     message: Optional[ChatMessage] = result.scalars().first()
@@ -365,6 +433,18 @@ async def get_message(
         return None
     if not user_can_access_workspace(thread.conversation.workspace, user_id):
         return None
+    if authorize_bound_document and thread.message_branching is True:
+        from src.services.threads.message_branches import (
+            BranchAccessError,
+            authorize_branch_document_read,
+        )
+
+        try:
+            await authorize_branch_document_read(
+                db, actor_id=user_id, document_id=thread.branch_document_id
+            )
+        except BranchAccessError:
+            return None
     return message
 
 

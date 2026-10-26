@@ -350,7 +350,7 @@ If `pending_tasks` is high:
 
 ### Worker Configuration
 
-Workers are configured in [backend/celery_worker.py](rag/backend/celery_worker.py):
+Workers are configured in [backend/celery_worker.py](../../backend/celery_worker.py):
 
 - **Concurrency:** 4 worker processes
 - **Queues:**
@@ -372,10 +372,10 @@ Registered tasks include:
 
 ## Files Created/Modified
 
-1. **New File:** [backend/src/api/workers.py](rag/backend/src/api/workers.py) - Workers monitoring API
-2. **Modified:** [backend/src/main.py](rag/backend/src/main.py) - Added workers router
-3. **Test Script:** [test_workers_endpoint.sh](rag/test_workers_endpoint.sh) - Endpoint verification
-4. **Documentation:** [WORKERS_MONITORING.md](rag/WORKERS_MONITORING.md) - This file
+1. **New File:** [backend/src/api/infrastructure/workers.py](../../backend/src/api/infrastructure/workers.py) - Workers monitoring API
+2. **Modified:** [backend/src/main.py](../../backend/src/main.py) - Added workers router
+3. **Test Script:** [test_workers_endpoint.sh](../../scripts/test_workers_endpoint.sh) - Endpoint verification
+4. **Documentation:** [WORKERS_MONITORING.md](WORKERS_MONITORING.md) - This file
 
 ## Benefits
 

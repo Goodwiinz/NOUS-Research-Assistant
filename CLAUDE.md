@@ -25,7 +25,7 @@ pnpm monorepo (Node 24, `pnpm@10.18.2`, one root `pnpm-lock.yaml`; no `npm` fall
 - `terminal/` and `./nous` — terminal client. `./nous` defaults to the shared dev backend unless `NOUS_API_URL` is set.
 - `packages/chat-runtime/` — shared chat runtime workspace package.
 - `evals/` — agent eval harness and recorded baselines. `tests/` — root cross-system suites, Playwright, k6 load tests. `backend/tests/` — backend tests.
-- `src/trigger/` — Trigger.dev jobs. `frontend/trigger.config.ts` resolves `./src/trigger` relative to `frontend/`, so prove which tree is actually loaded before editing or deploying a job.
+- `src/trigger/` — Trigger.dev jobs. The root `trigger.config.ts` (`dirs: ["./src/trigger"]`) loads this tree, and `trigger-deploy.yml` deploys it from the repo root on pushes to `main`. `frontend/trigger.config.ts` is an identical copy that loads only `frontend/src/trigger/example.ts` when run from `frontend/`; see `src/AGENTS.md`.
 - `deployment/`, `infrastructure/`, `.github/workflows/` — Helm/ArgoCD, Terraform, CI.
 
 ## Commands
@@ -85,9 +85,9 @@ pnpm --dir tests/e2e exec playwright test --project=chromium   # browser + runni
 - `app/(dashboard)/chat/page.tsx` is a composition root: no service imports, no business logic.
 - Ratchets (`frontend/quality-baseline.json`, tsconfig exclusions) only move stricter, in the PR that earns the move.
 
-**Retrieval and data.** Live retrieval is PostgreSQL full-text. DigitalOcean KB (`services/do_kb/`, behind `DO_KB_ENABLED`) is off in dev, and Qdrant is fully removed. Neo4j holds the knowledge graph, Redis is cache and Celery broker (DO Valkey in the cluster), and documents live in S3-compatible object storage. The agent checkpointer URL must be `postgresql://` (psycopg v3), not `postgresql+asyncpg://`.
+**Retrieval and data.** Live retrieval is PostgreSQL full-text. DigitalOcean KB (`services/do_kb/`, behind `DO_KB_ENABLED`) is off in the live dev deployment (`values-aws.yaml` sets `DO_KB_ENABLED` and `DO_KB_PRIMARY_READ` to `"false"`), and Qdrant is fully removed. Neo4j holds the knowledge graph, Redis is cache and Celery broker (ElastiCache on the AWS dev lane; DO Valkey belonged to the retired DOKS cluster), and documents live in S3-compatible object storage. The agent checkpointer URL must be `postgresql://` (psycopg v3), not `postgresql+asyncpg://`.
 
-**Deploy.** Only `dev` is live (ArgoCD auto-sync, namespace `rag-dev`). After a green Test Pipeline on `develop`, `release-dev.yml` builds the SHA and opens a digest-pinned GitOps PR to `values-dev.yaml`; merging it deploys. The frontend deploys separately via Vercel. `staging`/`production` values files are dead.
+**Deploy.** Only `dev` is live, on AWS EKS (`nous-dev-cluster`, `us-east-1`): Argo app `nous-dev-aws` (`infrastructure/argocd/applications/aws-dev.yaml`), namespace `multimodal-rag-system`, Helm values `values.yaml` + `values-aws.yaml`, tracking `develop`. After a green Test Pipeline on `develop`, `release-dev.yml` builds the SHA and opens a digest-pinned GitOps PR to `values-aws.yaml`; merging it deploys. `values-dev.yaml` (the old DOKS `rag-dev` cluster) is frozen rollback material. The frontend deploys separately via Vercel. `staging`/`production` values files are dead render fixtures. Details: `docs/engineering/gotchas.md`.
 
 ## Non-obvious rules worth repeating
 

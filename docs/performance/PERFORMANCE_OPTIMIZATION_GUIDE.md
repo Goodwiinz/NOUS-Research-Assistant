@@ -1,4 +1,7 @@
 # Comprehensive Performance Optimization Guide
+
+> **Stale (2026-10-17): Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Measurements and file paths below describe the system when the document was written and are not current performance evidence.**
+
 ## Multimodal Enterprise RAG System
 
 This guide provides detailed documentation for the performance optimization implementation across the entire RAG system, including monitoring, optimization strategies, and best practices.

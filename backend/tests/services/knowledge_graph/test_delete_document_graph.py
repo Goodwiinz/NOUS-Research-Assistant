@@ -10,9 +10,12 @@ The method must instead delete in two steps inside one transaction:
 
 1. DELETE this document's RELATIONSHIPS (`r.source_document_id` — a true
    per-document MERGE-key property on RELATED_TO edges).
-2. DELETE only entity NODES this doc created that are now fully orphaned —
-   the `COUNT { (e)--() } = 0` guard is the load-bearing predicate that keeps
-   shared nodes (still wired to other docs) alive.
+2. Remove the doc from every member node's `document_ids` reference count
+   (KN2; legacy nodes without the property count as `[source_document_id]`),
+   then DELETE only nodes left with NO remaining document AND no
+   relationships — the `size(remaining_document_ids) = 0` membership guard
+   keeps nodes other docs still mention alive, and the `COUNT { (e)--() } = 0`
+   guard keeps nodes other docs' edges still touch alive.
 
 Org scoping is defense-in-depth (property-based graph tenancy): AND'd with the
 doc anchor, never OR'd (an OR would widen the delete to the whole org's graph),
@@ -32,6 +35,12 @@ GET_SESSION = (
 )
 
 ORPHAN_GUARD = "COUNT { (e)--() } = 0"
+MEMBERSHIP_GUARD = "size(remaining_document_ids) = 0"
+# Effective per-document membership: document_ids, or the legacy creator stamp.
+MEMBER_IDS = (
+    "coalesce(e.document_ids, CASE WHEN e.source_document_id IS NULL "
+    "THEN [] ELSE [e.source_document_id] END)"
+)
 
 
 def _session(rel_count=0, node_count=0):
@@ -93,10 +102,15 @@ def test_delete_document_graph_two_step_relationships_then_orphan_nodes(
     assert "r.organization_id = $organization_id" in rel_query
     assert "r.organization_id IS NULL" in rel_query
 
-    # Step 2: node delete anchored on the creator stamp...
-    assert "MATCH (e:Entity {source_document_id: $source_document_id})" in node_query
-    # ...guarded so only fully-orphaned nodes die. THE load-bearing predicate:
-    # without it, deleting a creator doc destroys nodes shared with other docs.
+    # Step 2: node step anchored on per-document MEMBERSHIP (document_ids, or
+    # the legacy creator stamp), not on the creator stamp alone...
+    assert "MATCH (e:Entity)" in node_query
+    assert f"$source_document_id IN {MEMBER_IDS}" in node_query
+    # ...guarded so only nodes with no remaining document AND no edges die.
+    # Both are load-bearing: without the membership guard, deleting the
+    # creator doc destroys nodes other docs still mention (KN2); without the
+    # orphan guard it destroys nodes still wired to other docs' edges.
+    assert MEMBERSHIP_GUARD in node_query
     assert ORPHAN_GUARD in node_query
     assert "e.organization_id = $organization_id" in node_query
     assert "e.organization_id IS NULL" in node_query
@@ -135,12 +149,14 @@ def test_delete_document_graph_shared_node_semantics_documented(mock_session):
     """Shared-node scenario (docs A + B both name entity E, A created it):
 
     - A's relationships match step 1 (r.source_document_id = A) → deleted.
-    - E still has B's relationships → COUNT { (e)--() } != 0 → step 2 keeps it.
-      (Known drift: E.source_document_id now points at deleted doc A — harmless
-      for reads; a future reconciler re-stamps it.)
-    - E's only edges were A's → orphaned after step 1 → step 2 deletes it.
-    - A node B created that A merely referenced never matches step 2's anchor
-      (source_document_id = B), so it survives regardless of degree.
+    - E.document_ids = [A, B] → step 2 drops A, re-points E.source_document_id
+      to B, and keeps E (membership guard) regardless of edge count (KN2).
+    - E.document_ids = [A] but E still has B's edges → COUNT { (e)--() } != 0
+      → step 2 keeps it.
+    - E.document_ids = [A] and E's only edges were A's → orphaned after step 1
+      → step 2 deletes it.
+    - A node whose membership never contained A does not match step 2's
+      anchor, so it survives regardless of degree.
 
     Mock-level: assert the query shape that encodes exactly these semantics, so
     the orphan guard cannot silently regress.
@@ -158,12 +174,17 @@ def test_delete_document_graph_shared_node_semantics_documented(mock_session):
     # Relationships die by THEIR OWN doc stamp, not their endpoints' stamps.
     assert "r:RELATED_TO {source_document_id: $source_document_id}" in rel_query
     assert "e.source_document_id" not in rel_query
-    # Nodes die only when (a) this doc created them AND (b) nothing references
-    # them any more — both predicates present, AND'd (no OR between them).
-    assert "(e:Entity {source_document_id: $source_document_id})" in node_query
+    # Nodes die only when (a) this doc was a member, (b) no document remains
+    # AND (c) nothing references them any more — all present, AND'd (no OR).
+    assert f"$source_document_id IN {MEMBER_IDS}" in node_query
+    assert MEMBERSHIP_GUARD in node_query
     assert ORPHAN_GUARD in node_query
     where = node_query.split("WHERE", 1)[1].split("DELETE", 1)[0]
     assert "AND" in where and ORPHAN_GUARD in where
+    final_where = where.rsplit("WHERE", 1)[1]
+    assert " OR " not in final_where
+    assert MEMBERSHIP_GUARD in final_where and ORPHAN_GUARD in final_where
+    assert "AND e.source_document_id IS NOT NULL" in final_where
 
 
 @pytest.mark.unit
@@ -232,8 +253,9 @@ def test_delete_document_graph_omits_org_predicate_when_org_none(mock_session):
 @patch(GET_SESSION)
 def test_delete_document_graph_does_not_widen_to_whole_org(mock_session):
     """Regression: both steps must AND the doc anchor with org, never OR them
-    (an OR would delete the entire org's graph). The doc anchor stays a MATCH
-    pattern property; org lives only in the WHERE."""
+    (an OR would delete the entire org's graph). Step 1's doc anchor stays a
+    MATCH pattern property; step 2's is the membership predicate AND'd after
+    the org predicate; org lives only in the WHERE."""
     from src.services.knowledge_graph.knowledge_graph_service import (
         KnowledgeGraphService,
     )
@@ -242,8 +264,12 @@ def test_delete_document_graph_does_not_widen_to_whole_org(mock_session):
     mock_session.return_value = ctx
     KnowledgeGraphService().delete_document_graph("doc-1", "org-1")
 
-    for query in _queries(tx):
-        assert "source_document_id: $source_document_id" in query
+    rel_query, node_query = _queries(tx)
+    assert "source_document_id: $source_document_id" in rel_query
+    org_pred, _, anchor = node_query.partition("\n                      AND ")
+    assert "e.organization_id = $organization_id" in org_pred
+    assert anchor.startswith(f"$source_document_id IN {MEMBER_IDS}")
+    for query in (rel_query, node_query):
         # Must NOT reuse the read-scope helper's OR'd source_document_id IN-list.
         assert "IN $source_document_ids" not in query
 

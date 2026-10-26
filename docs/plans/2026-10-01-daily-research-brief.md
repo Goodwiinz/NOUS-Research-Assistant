@@ -163,3 +163,7 @@ scripts/ci/run_local_ci.sh --base origin/develop [--frontend]
 ```
 
 Checks that need a DB, browser, credentials or cluster are reported as `NOT RUN`, never as passing.
+
+## Status update 2026-10-17
+
+The original status line above ("proposed; awaiting review") is kept as written. Checked against `origin/develop` history on 2026-10-17: the plan was merged as #1823 and the milestone work it tracks has landed, including GOO-331 (#1827), GOO-332 (#1824), GOO-333 (#1822), GOO-334 (#1929), GOO-335 (#1934), GOO-338 (#1834), the release-evidence refresh (#1939) and the follow-up that keeps search attempt history out of the hashed stage envelope (#1955). GOO-336 and GOO-337 were not matched to a merge commit by subject, so their status is unverified here. See [Daily Research Brief verification](../testing/daily-research-brief-verification.md) for the evidence record.

@@ -1,5 +1,7 @@
 # ArXiv Download and Local Extraction Workflow
 
+> **Unverified 2026-10-17: the ingest route in the current backend is `POST /api/v1/arxiv/ingest` (see `backend/src/api/arxiv/core.py`), not `/ingest/papers`, and request bodies may have drifted. Check `backend/openapi.json` before using any curl example below.**
+
 ## Overview
 This workflow downloads ArXiv papers first, then extracts features from the local PDF files. This provides better extraction results with meaningful relationships in the knowledge graph.
 

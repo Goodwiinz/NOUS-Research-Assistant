@@ -1,5 +1,7 @@
 # Cursor shadcn/ui MCP Server Integration
 
+> **Dated 2026-10-17: this is a one-off IDE setup status note kept for reference. The consolidated shadcn/ui MCP setup guide is [SHADCN_MCP_SETUP.md](SHADCN_MCP_SETUP.md); prefer it. Check the tool's current documentation before running any command here.**
+
 ## ✅ Setup Complete
 
 Your Cursor has been successfully configured with the **official** shadcn/ui MCP Server! Here's what was configured:

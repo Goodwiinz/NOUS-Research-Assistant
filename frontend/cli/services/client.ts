@@ -11,11 +11,16 @@ export function getCliAuthHeaders(): Record<string, string> {
 
 const DEFAULT_API_BASE = 'http://localhost:8000/api/v1';
 
+/** The backend used when neither NOUS_API_URL nor a saved api_url is set. */
+export function getDefaultApiBase(): string {
+  return process.env.NOUS_DEFAULT_API_URL || DEFAULT_API_BASE;
+}
+
 export function getApiBase(): string {
   if (process.env.NOUS_API_URL) return process.env.NOUS_API_URL;
   const config = loadConfig();
   if (config?.api_url) return config.api_url;
-  return process.env.NOUS_DEFAULT_API_URL || DEFAULT_API_BASE;
+  return getDefaultApiBase();
 }
 
 export const API_BASE = getApiBase();

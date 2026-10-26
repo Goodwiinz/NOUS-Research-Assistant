@@ -65,10 +65,48 @@ rediscover which line the test is actually protecting.
 ## Commands
 
 ```sh
-pytest tests/ --cov=src            # full backend suite with coverage
+(cd backend && pytest tests/ --cov=src)   # full backend suite with coverage; run from backend/
 pytest -q backend/tests/unit/ci backend/tests/unit/architecture
 pytest -q backend/tests/unit/api backend/tests/api/threads
 pytest -q backend/tests/unit/services/threads
 pnpm --dir frontend test
 pnpm --dir tests/e2e exec playwright test --project=chromium
 ```
+
+`backend/pytest.ini` applies to every `pytest ... backend/...` run. It sets
+`--strict-markers`, so use only registered markers (`unit`, `integration`,
+`e2e`, `slow`, `resilience`, `regression`, `smoke`, ...). Three markers need LLM
+credentials and are not part of a default local run: `golden` (local golden-case
+agent regression), `langsmith` (LangSmith dataset evaluation) and `eval` (slow
+agent benchmarks).
+
+## CI job map
+
+`.github/workflows/test-pipeline.yml` ("Test Pipeline") runs on pushes and PRs
+to `main` and `develop`, and on manual dispatch. The ids below are the job ids in
+the file; `test-summary` ("Release Gate") runs `scripts/ci/assert_required_jobs.py`
+over the others.
+
+| Job id | Display name | Covers |
+| --- | --- | --- |
+| `ci-plan` | CI Plan | Chooses the CI profile that decides which jobs are required. |
+| `lightweight-checks` | Lightweight Checks | Directory docs lint, feature-map upkeep, script/NOUS instruction contracts, CI selection regressions. |
+| `lint-backend` | Lint Backend | ruff (blocking), black, isort and mypy on changed files; directory docs lint. |
+| `lint-frontend` | Lint Frontend | Type check and the frontend quality ratchet; full lint is advisory. |
+| `migration-check` | Alembic Migration Check | Alembic head and migration checks. |
+| `openapi-contract` | OpenAPI Contract Ratchet | `backend/openapi.json` drift and breaking-change checks. |
+| `unit-tests` | Unit Tests | Backend unit suite. |
+| `golden-replay` | Golden Replay | Deterministic replay of `backend/tests/eval/test_agent_regression.py`, no credentials. |
+| `integration-tests` | Integration Tests (sharded) | Backend integration tests. |
+| `resilience-tests` | Resilience Tests | Retry, circuit-breaker and bulkhead tests. |
+| `frontend-tests` | Frontend Tests | Vitest suite. |
+| `security-scan` | Security Scan | Bandit on `backend/src` and `safety` on `backend/requirements.txt`. |
+| `e2e-tests` | E2E Tests | Playwright browser tests. |
+| `performance-tests` | Performance Tests | Performance benchmarks; not listed in the Release Gate `needs`. |
+| `test-summary` | Release Gate | Requires the selected jobs to pass and validates every skip. |
+
+`.github/workflows/agent-eval.yml` ("Agent Regression Eval") is separate: a
+weekly (Monday 06:00 UTC) and manually dispatched LangSmith golden-set sweep on a
+self-hosted runner, using the credentials the `golden`, `langsmith` and `eval`
+markers need. The recorded agent-flow harness is described in
+[`evals/README.md`](../../evals/README.md).

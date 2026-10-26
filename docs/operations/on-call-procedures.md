@@ -1,5 +1,15 @@
 # On-Call Procedures and Runbooks
 
+> **Status (reconciled 2026-10-17):** the Kubernetes commands below were
+> updated for the live target: EKS `nous-dev-cluster`, namespace
+> `multimodal-rag-system`, Helm release `nous-dev-aws`. For a verified command
+> set start with [AWS on-call commands](aws-on-call.md). Qdrant is removed
+> (retrieval is PostgreSQL full-text), PostgreSQL is RDS (not an in-cluster pod),
+> and there is no `document-processor` deployment: document processing runs in
+> the Celery worker. Items marked *not verified* (dashboard URLs, internal
+> backend HTTP endpoints, the escalation chain, contact placeholders) are
+> carried over from the original text and were not checked against the repo.
+
 ## Table of Contents
 1. [On-Call Responsibilities](#on-call-responsibilities)
 2. [Escalation Policy](#escalation-policy)
@@ -29,7 +39,7 @@
 - Grafana dashboards (monitoring.company.com)
 - Alertmanager (alerts.company.com)
 - Kubernetes cluster access
-- Database access (PostgreSQL, Neo4j, Qdrant)
+- Database access (RDS PostgreSQL, Neo4j; Redis is ElastiCache)
 - Log aggregation platform (ELK/Splunk)
 - Communication platforms (Slack, PagerDuty)
 
@@ -128,6 +138,13 @@ Post-mortem scheduled: [Date/Time]
 
 ## Runbooks by Service
 
+> **Scaling caveat on AWS.** Argo CD `selfHeal` reverts manual `kubectl scale`,
+> `set env` and `patch` on the backend and beat Deployments within minutes;
+> only the Celery worker's replica count is excluded from drift
+> (`ignoreDifferences` in `aws-dev.yaml`, because the worker is HPA-owned). A
+> durable change is a values change in Git. Manual mutation of the live cluster
+> needs explicit authorization.
+
 ### Document Processing Runbooks
 
 #### 🚨 High Document Processing Failure Rate
@@ -139,7 +156,7 @@ Post-mortem scheduled: [Date/Time]
 1. **Check Current Status**
    ```bash
    # Check processing queue
-   kubectl get pods -n rag-system | grep document-processor
+   kubectl get pods -n multimodal-rag-system -l app.kubernetes.io/component=celery-worker
 
    # Check queue size
    curl http://backend:8000/api/v1/documents/queue/status
@@ -148,51 +165,42 @@ Post-mortem scheduled: [Date/Time]
 2. **Review Logs**
    ```bash
    # Check processor logs
-   kubectl logs -n rag-system -l app=document-processor --tail=100
+   kubectl logs -n multimodal-rag-system -l app.kubernetes.io/component=celery-worker --tail=100
 
    # Check Celery worker status
-   kubectl exec -it rag-celery-worker-dev -- celery -A src.tasks.celery_app inspect active
+   kubectl exec -it -n multimodal-rag-system deploy/nous-dev-aws-celery-worker -- celery -A src.tasks.celery_app inspect active
    ```
 
 3. **Verify Dependencies**
    ```bash
    # Check database connectivity
-   kubectl exec -it rag-backend-dev -- python -c "from src.database import get_db; print('DB OK')"
+   kubectl exec -it -n multimodal-rag-system deployment/nous-dev-aws-knowledge-graph-analytics-backend -- python -c "from src.database import get_db; print('DB OK')"
 
-   # Check Qdrant connectivity
-   curl http://qdrant:6333/collections
-
-   # Check Neo4j connectivity
-   curl -u neo4j:neo4jpassword http://neo4j:7474/db/data/
+   # Check Neo4j pod
+   kubectl get pods -n multimodal-rag-system | grep neo4j
    ```
 
 **Common Issues and Solutions**:
 - **Database Connection Pool Exhausted**:
   ```bash
   # Scale backend pods
-  kubectl scale deployment backend --replicas=4 -n rag-system
+  kubectl scale deployment/nous-dev-aws-knowledge-graph-analytics-backend --replicas=4 -n multimodal-rag-system
 
-  # Check connection pool settings
-  kubectl exec -it rag-backend-dev -- env | grep DATABASE
+  # Check connection pool settings (counts only)
+  kubectl exec -it -n multimodal-rag-system deployment/nous-dev-aws-knowledge-graph-analytics-backend -- sh -c 'env | grep -c ^DATABASE'  # counts only; never print secret values
   ```
 
 - **Insufficient Worker Resources**:
   ```bash
   # Scale Celery workers
-  kubectl scale deployment celery-worker --replicas=8 -n rag-system
+  kubectl scale deployment/nous-dev-aws-celery-worker --replicas=8 -n multimodal-rag-system
 
   # Check worker resource limits
-  kubectl describe deployment celery-worker -n rag-system
+  kubectl describe deployment/nous-dev-aws-celery-worker -n multimodal-rag-system
   ```
 
-- **Vector Database Issues**:
-  ```bash
-  # Restart Qdrant if unresponsive
-  kubectl delete pod qdrant-0 -n rag-system
-
-  # Check Qdrant logs
-  kubectl logs qdrant-0 -n rag-system --tail=50
-  ```
+- **Search/retrieval issues**: Qdrant is removed. Live retrieval is PostgreSQL
+  full-text on RDS, so check database health (below) rather than a vector store.
 
 **Escalation Criteria**:
 - Failure rate > 50% for more than 5 minutes
@@ -209,13 +217,13 @@ Post-mortem scheduled: [Date/Time]
    curl http://backend:8000/api/v1/documents/queue/metrics
 
    # Worker status
-   kubectl get pods -n rag-system | grep celery-worker
+   kubectl get pods -n multimodal-rag-system -l app.kubernetes.io/component=celery-worker
    ```
 
 2. **Analyze Processing Bottlenecks**
    ```bash
    # Check worker performance
-   kubectl top pods -n rag-system | grep celery-worker
+   kubectl top pods -n multimodal-rag-system -l app.kubernetes.io/component=celery-worker
 
    # Check document processing metrics
    curl http://backend:8000/metrics | grep document_processing
@@ -231,7 +239,7 @@ Post-mortem scheduled: [Date/Time]
 - **Scale Workers**:
   ```bash
   # Temporary scale up
-  kubectl scale deployment celery-worker --replicas=12 -n rag-system
+  kubectl scale deployment/nous-dev-aws-celery-worker --replicas=12 -n multimodal-rag-system
   ```
 
 - **Prioritize Processing**:
@@ -265,16 +273,16 @@ Post-mortem scheduled: [Date/Time]
    curl http://backend:8000/api/v1/websocket/health
 
    # Check backend pod status
-   kubectl get pods -n rag-system | grep backend
+   kubectl get pods -n multimodal-rag-system -l app.kubernetes.io/component=backend
    ```
 
 3. **Analyze Error Patterns**
    ```bash
    # Check recent WebSocket logs
-   kubectl logs -n rag-system -l app=backend --tail=200 | grep websocket
+   kubectl logs -n multimodal-rag-system -l app.kubernetes.io/component=backend --tail=200 | grep websocket
 
    # Check for connection limits
-   kubectl describe service backend -n rag-system
+   kubectl describe service nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system
    ```
 
 **Common Issues and Solutions**:
@@ -285,16 +293,16 @@ Post-mortem scheduled: [Date/Time]
   sysctl net.ipv4.tcp_max_syn_backlog
 
   # Increase connection limits if needed
-  kubectl patch deployment backend -n rag-system -p '{"spec":{"template":{"spec":{"containers":[{"name":"backend","resources":{"limits":{"memory":"2Gi","cpu":"1000m"}}}]}}}'
+  kubectl patch deployment/nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system -p '{"spec":{"template":{"spec":{"containers":[{"name":"backend","resources":{"limits":{"memory":"2Gi","cpu":"1000m"}}}]}}}'
   ```
 
 - **Memory Pressure**:
   ```bash
   # Check pod memory usage
-  kubectl top pods -n rag-system | grep backend
+  kubectl top pods -n multimodal-rag-system -l app.kubernetes.io/component=backend
 
   # Scale backend if needed
-  kubectl scale deployment backend --replicas=3 -n rag-system
+  kubectl scale deployment/nous-dev-aws-knowledge-graph-analytics-backend --replicas=3 -n multimodal-rag-system
   ```
 
 #### 🚨 WebSocket Connection Drop
@@ -304,28 +312,28 @@ Post-mortem scheduled: [Date/Time]
 1. **Verify Infrastructure Health**
    ```bash
    # Check load balancer status
-   kubectl get svc -n rag-system
+   kubectl get svc -n multimodal-rag-system
 
-   # Check ingress controller
-   kubectl get pods -n ingress-nginx
+   # Check the AWS Load Balancer Controller (ALB ingress)
+   kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
    ```
 
 2. **Review Recent Deployments**
    ```bash
    # Check recent changes
-   kubectl rollout history deployment/backend -n rag-system
+   kubectl rollout history deployment/nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system
 
    # Check for recent configuration changes
-   kubectl get events -n rag-system --sort-by='.lastTimestamp' | tail -20
+   kubectl get events -n multimodal-rag-system --sort-by='.lastTimestamp' | tail -20
    ```
 
 3. **Network Diagnostics**
    ```bash
    # Test WebSocket connectivity
-   wscat -c ws://backend.rag-system.svc.cluster.local:8000/ws
+   wscat -c ws://nous-dev-aws-knowledge-graph-analytics-backend.multimodal-rag-system.svc.cluster.local:80/ws
 
    # Check DNS resolution
-   nslookup backend.rag-system.svc.cluster.local
+   nslookup nous-dev-aws-knowledge-graph-analytics-backend.multimodal-rag-system.svc.cluster.local
    ```
 
 ### API Services Runbooks
@@ -361,34 +369,34 @@ Post-mortem scheduled: [Date/Time]
 3. **Review Application Logs**
    ```bash
    # Check recent error logs
-   kubectl logs -n rag-system -l app=backend --tail=100 | grep -i error
+   kubectl logs -n multimodal-rag-system -l app.kubernetes.io/component=backend --tail=100 | grep -i error
 
    # Check for memory issues
-   kubectl logs -n rag-system -l app=backend --tail=100 | grep -i memory
+   kubectl logs -n multimodal-rag-system -l app.kubernetes.io/component=backend --tail=100 | grep -i memory
    ```
 
 **Common Issues and Solutions**:
 - **Database Connection Issues**:
   ```bash
   # Test database connectivity
-  kubectl exec -it rag-backend-dev -- python -c "
+  kubectl exec -it -n multimodal-rag-system deployment/nous-dev-aws-knowledge-graph-analytics-backend -- python -c "
   from sqlalchemy import create_engine
-  engine = create_engine('postgresql://postgres:postgres@postgres:5432/multimodal_rag_dev')
+  engine = create_engine('<DATABASE_URL from the pod environment; never paste credentials>')
   engine.execute('SELECT 1')
   print('Database OK')
   "
 
   # Restart backend if needed
-  kubectl rollout restart deployment/backend -n rag-system
+  kubectl rollout restart deployment/nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system
   ```
 
 - **Resource Exhaustion**:
   ```bash
   # Check resource usage
-  kubectl top pods -n rag-system | grep backend
+  kubectl top pods -n multimodal-rag-system -l app.kubernetes.io/component=backend
 
   # Scale horizontally
-  kubectl scale deployment backend --replicas=4 -n rag-system
+  kubectl scale deployment/nous-dev-aws-knowledge-graph-analytics-backend --replicas=4 -n multimodal-rag-system
   ```
 
 ### Database Services Runbooks
@@ -399,20 +407,20 @@ Post-mortem scheduled: [Date/Time]
 **Investigation Steps**:
 1. **Check Database Connectivity**
    ```bash
-   # PostgreSQL
-   kubectl exec -it rag-postgres-dev -- psql -U postgres -d multimodal_rag_dev -c "SELECT 1;"
+   # PostgreSQL is RDS (credentials in aws-database-credentials, never print them).
+   # The backend readiness probe checks the database:
+   kubectl exec -n multimodal-rag-system deployment/nous-dev-aws-knowledge-graph-analytics-backend -- curl -fsS localhost:8000/health/readiness
 
-   # Neo4j
-   curl -u neo4j:neo4jpassword http://neo4j:7474/db/data/
-
-   # Qdrant
-   curl http://qdrant:6333/collections
+   # Neo4j (StatefulSet nous-dev-aws-knowledge-graph-analytics-neo4j)
+   kubectl get pods -n multimodal-rag-system | grep neo4j
    ```
 
 2. **Review Database Performance**
    ```bash
    # PostgreSQL slow queries
-   kubectl exec -it rag-postgres-dev -- psql -U postgres -d multimodal_rag_dev -c "
+   # RDS is in private subnets: run psql from a pod or host that can reach it,
+   # and never echo the connection URL.
+   psql "$DATABASE_URL" -c "
    SELECT query, mean_time, calls, total_time
    FROM pg_stat_statements
    ORDER BY mean_time DESC
@@ -420,7 +428,7 @@ Post-mortem scheduled: [Date/Time]
    "
 
    # Check connection pool status
-   kubectl exec -it rag-backend-dev -- python -c "
+   kubectl exec -it -n multimodal-rag-system deployment/nous-dev-aws-knowledge-graph-analytics-backend -- python -c "
   from src.database import engine
   print(f'Pool size: {engine.pool.size()}')
   print(f'Checked out: {engine.pool.checkedout()}')
@@ -430,7 +438,9 @@ Post-mortem scheduled: [Date/Time]
 3. **Monitor Database Resources**
    ```bash
    # PostgreSQL metrics
-   kubectl exec -it rag-postgres-dev -- psql -U postgres -d multimodal_rag_dev -c "
+   # RDS is in private subnets: run psql from a pod or host that can reach it,
+   # and never echo the connection URL.
+   psql "$DATABASE_URL" -c "
    SELECT
      datname,
      numbackends,
@@ -449,14 +459,16 @@ Post-mortem scheduled: [Date/Time]
 - **Connection Pool Exhaustion**:
   ```bash
   # Increase pool size temporarily
-  kubectl set env deployment/backend -n rag-system DATABASE_POOL_SIZE=20
-  kubectl rollout restart deployment/backend -n rag-system
+  kubectl set env deployment/nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system DATABASE_POOL_SIZE=20
+  kubectl rollout restart deployment/nous-dev-aws-knowledge-graph-analytics-backend -n multimodal-rag-system
   ```
 
 - **Query Performance Issues**:
   ```bash
   # Add indexes for slow queries
-  kubectl exec -it rag-postgres-dev -- psql -U postgres -d multimodal_rag_dev -c "
+  # RDS is in private subnets: run psql from a pod or host that can reach it,
+  # and never echo the connection URL.
+  psql "$DATABASE_URL" -c "
   CREATE INDEX CONCURRENTLY idx_documents_created_at
   ON documents(created_at);
   "

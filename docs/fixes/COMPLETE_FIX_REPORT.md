@@ -37,7 +37,7 @@ DETAIL: Key (name)=(Demo Organization) already exists.
 The `register_user()` method in `auth_service.py` always attempted to create a new organization without checking if one with that name already existed.
 
 #### Solution
-Modified [auth_service.py:175-198](rag/backend/src/services/auth_service.py#L175-L198):
+Modified `auth_service.py:175-198` (written against `rag/backend/src/services/auth_service.py`, which is no longer in the tree):
 - Check if organization exists before creating
 - If exists: Join existing organization as USER role
 - If doesn't exist: Create new organization and join as ADMIN role

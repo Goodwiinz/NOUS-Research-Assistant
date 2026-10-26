@@ -1,5 +1,7 @@
 # Monitoring Authentication and Authorization Design
 
+> **Stale / historical (2026-10-17):** It is a design document for a subsystem; the described service layout may not match the current code. Verify against `backend/src/` and `backend/openapi.json` before relying on it. Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 ## Overview
 
 This document outlines the comprehensive authentication and authorization strategy for the Multimodal RAG System's monitoring infrastructure. The design ensures secure access to monitoring data while maintaining flexibility for different user roles and service-to-service communication.

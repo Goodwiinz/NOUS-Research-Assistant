@@ -27,7 +27,10 @@ from src.models.graph import ExtractionMethod as GraphExtractionMethod
 from src.models.graph import RelationshipType as GraphRelationshipType
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.services.documents.satellite_state import begin_write, finish_write
-from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
+from src.services.knowledge_graph.knowledge_graph_service import (
+    GraphExtractor,
+    knowledge_graph_service,
+)
 from src.services.processing.llm_entity_extraction import LLMEntityExtractionService
 from src.services.processing.processing_service import ProcessingPipeline
 from src.services.search.fulltext_search_service import fulltext_search_service
@@ -221,6 +224,7 @@ def _index_entities_to_graph(document, entities) -> int:
                 ),
                 document_id=str(document.id),
                 confidence=entity.confidence or 0.8,
+                extractor=GraphExtractor.SPACY,
                 organization_id=(
                     str(document.organization_id) if document.organization_id else None
                 ),
@@ -561,12 +565,21 @@ def process_document_ingestion(self, job_id: str):
             finally:
                 # SIGKILL cannot reach this acknowledgement. Its token then
                 # keeps successful earlier cleanup from hiding the late write.
+                # Expired ORM reads during graph fan-out reacquire the outer
+                # session's connection. Release it before the independent
+                # acknowledgement: workers may have a one-connection pool.
+                # Keep only the satellite outcome, never commit a stale row.
+                graph_outcome = (
+                    document.neo4j_index_status,
+                    document.neo4j_indexed_at,
+                )
+                db.rollback()
                 with SessionLocal() as outcome_db:
                     current = (
                         outcome_db.query(Document)
                         .filter(
-                            Document.id == document.id,
-                            Document.organization_id == document.organization_id,
+                            Document.id == document_ids[0],
+                            Document.organization_id == document_ids[1],
                         )
                         .populate_existing()
                         .with_for_update()
@@ -586,6 +599,10 @@ def process_document_ingestion(self, job_id: str):
                             )
                         outcome_db.commit()
                 db.refresh(document, attribute_names=["document_metadata"])
+                (
+                    document.neo4j_index_status,
+                    document.neo4j_indexed_at,
+                ) = graph_outcome
             commit_if_active()
 
         # Step 3: Embedding Generation — push the document to DO KB, the
@@ -1157,7 +1174,8 @@ def kg_extract_entities_job(self, job_id: str):
                     relationships=[],
                     upsert=True,
                     document_id=str(document.id),
-                )
+                ),
+                extractor=GraphExtractor.LLM,
             )
 
             entities_created_total += len(entity_result.created_entities)
@@ -1208,6 +1226,7 @@ def kg_extract_entities_job(self, job_id: str):
                     )
                 )
 
+            relationship_errors = 0
             if relationship_requests:
                 relationship_result = knowledge_graph_service.create_entities_batch(
                     BatchEntityRequest(
@@ -1215,12 +1234,45 @@ def kg_extract_entities_job(self, job_id: str):
                         relationships=relationship_requests,
                         upsert=True,
                         document_id=str(document.id),
-                    )
+                    ),
+                    extractor=GraphExtractor.LLM,
                 )
                 relationships_created_total += len(
                     relationship_result.created_relationships
                 )
-                errors_total += len(relationship_result.errors)
+                relationship_errors = len(relationship_result.errors)
+                errors_total += relationship_errors
+
+            # Drop the membership/edges this document no longer emits (KN2
+            # follow-up), but only for a complete extraction written without
+            # errors: a partial LLM result (timed out, or some chunks failed —
+            # partial chunk failure leaves .error unset) or a failed write would
+            # read as "no longer emitted" and strip valid entities.
+            if (
+                not extraction_result.error
+                and not extraction_result.chunks_failed
+                and not entity_result.errors
+                and not relationship_errors
+            ):
+                try:
+                    knowledge_graph_service.reconcile_document_graph(
+                        str(document.id),
+                        (
+                            str(document.organization_id)
+                            if document.organization_id
+                            else None
+                        ),
+                        extractor=GraphExtractor.LLM,
+                        entities=create_requests,
+                        relationships=relationship_requests,
+                    )
+                except Exception as reconcile_error:
+                    errors_total += 1
+                    logger.warning(
+                        "Graph reconcile failed for document %s in KG job: %s",
+                        document.id,
+                        reconcile_error,
+                    )
 
         job.update_progress("Finalizing extraction job", 90)
 

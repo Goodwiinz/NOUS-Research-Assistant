@@ -1,5 +1,7 @@
 # NOUS — Project Structure
 
+> **Non-authoritative (2026-10-17): this hand-written structure overview is a dated snapshot. It lists Qdrant, which is removed (live retrieval is PostgreSQL full-text), and counts that have drifted. Check the code and the [code maps](../docs/CODEMAPS/README.md) instead.**
+
 **Multimodal Intelligence Platform · Next.js 15 + FastAPI + PostgreSQL/Qdrant/Neo4j/Redis**
 
 ---

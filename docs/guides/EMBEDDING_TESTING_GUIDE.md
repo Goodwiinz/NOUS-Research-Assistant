@@ -7,7 +7,7 @@ This guide provides comprehensive testing strategies for your Azure OpenAI embed
 ### 1. Quick Test (`test_embedding_quick.py`)
 **Purpose**: Fast validation that the embedding service is working
 ```bash
-python test_embedding_quick.py
+python scripts/testing/test_embedding_quick.py
 ```
 
 **What it tests**:
@@ -21,7 +21,7 @@ python test_embedding_quick.py
 ### 2. Comprehensive Test Suite (`test_embedding_comprehensive.py`)
 **Purpose**: Complete functional and performance testing
 ```bash
-python test_embedding_comprehensive.py
+python scripts/testing/test_embedding_comprehensive.py
 ```
 
 **What it tests**:
@@ -36,7 +36,7 @@ python test_embedding_comprehensive.py
 ### 3. Integration Test (`test_embedding_integration.py`)
 **Purpose**: Backend service integration testing
 ```bash
-python test_embedding_integration.py
+python scripts/testing/test_embedding_integration.py
 ```
 
 **What it tests**:
@@ -195,19 +195,19 @@ embeddings = await azure_openai_service.get_embeddings(batch_texts)
 ### Daily Validation
 ```bash
 # Quick health check
-python test_embedding_quick.py
+python scripts/testing/test_embedding_quick.py
 ```
 
 ### Weekly Comprehensive Testing
 ```bash
 # Full test suite
-python test_embedding_comprehensive.py
+python scripts/testing/test_embedding_comprehensive.py
 ```
 
 ### Integration Testing
 ```bash
 # Backend integration validation
-python test_embedding_integration.py
+python scripts/testing/test_embedding_integration.py
 ```
 
 ### Automated Testing in CI/CD
@@ -215,8 +215,8 @@ python test_embedding_integration.py
 # Example GitHub Actions step
 - name: Test Azure OpenAI Embeddings
   run: |
-    python test_embedding_quick.py
-    python test_embedding_comprehensive.py
+    python scripts/testing/test_embedding_quick.py
+    python scripts/testing/test_embedding_comprehensive.py
 ```
 
 ## 📝 Test Report Template

@@ -9,7 +9,8 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from enum import Enum
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from neo4j import Driver, GraphDatabase, Session
 from neo4j.exceptions import ServiceUnavailable, SessionExpired
@@ -195,6 +196,223 @@ def _two_endpoint_scope(
         alias_b,
     )
     return "", {}
+
+
+def _entity_document_ids_expr(alias: str) -> str:
+    """Cypher for the *effective* per-document membership list of an Entity.
+
+    :Entity nodes are shared by every document in an org that names the entity
+    (the MERGE key has no document component), so ``source_document_id`` (set
+    only ON CREATE) records merely the FIRST creator. ``document_ids`` is the
+    reference-count list every entity write path appends to (KN2) and
+    ``delete_document_graph`` subtracts from.
+
+    Legacy nodes written before the property existed have no ``document_ids``;
+    they are read as ``[source_document_id]`` — exactly the pre-KN2 semantics —
+    or ``[]`` when that is also null (Cypher cannot store a list containing
+    null, and a null-doc node never matched the old creator anchor either).
+    """
+    return (
+        f"coalesce({alias}.document_ids, "
+        f"CASE WHEN {alias}.source_document_id IS NULL THEN [] "
+        f"ELSE [{alias}.source_document_id] END)"
+    )
+
+
+def _append_entity_document_id_clause(
+    alias: str, docs_expr: str, carry: Tuple[str, ...] = ()
+) -> str:
+    """``WITH … SET`` that idempotently appends the ids in ``docs_expr`` to the
+    entity's ``document_ids`` (KN2 reference count).
+
+    ``docs_expr`` is a Cypher list built from bound parameters or row fields
+    (never interpolated user text). Null ids are skipped, leaving the list
+    unchanged (but still materialised from the legacy fallback); ids already
+    present are not duplicated. Appending a whole list rather than one id makes
+    the result independent of write order, so batch rows that merge into the
+    same node can each carry every document that names it. ``carry`` names
+    extra variables the WITH must keep in scope (e.g. the UNWIND row). Callers
+    append their own RETURN.
+    """
+    kept = ", ".join((*carry, alias))
+    links = _entity_document_links_expr(alias, "existing_document_ids")
+    return (
+        f"WITH {kept}, {_entity_document_ids_expr(alias)} AS existing_document_ids\n"
+        f"WITH {kept}, existing_document_ids, {links} AS existing_document_links\n"
+        f"SET {alias}.document_ids = existing_document_ids + [\n"
+        f"    d IN {docs_expr}\n"
+        f"    WHERE d IS NOT NULL AND NOT d IN existing_document_ids],\n"
+        f"    {alias}.document_links = existing_document_links + [\n"
+        f"    d IN {docs_expr}\n"
+        f"    WHERE d IS NOT NULL\n"
+        f"      AND NOT ($document_extractor + ':' + d) IN existing_document_links\n"
+        f"    | $document_extractor + ':' + d]"
+    )
+
+
+class GraphExtractor(str, Enum):
+    """Which extraction pipeline wrote a document's link to an entity or edge.
+
+    Re-extraction reconciles per extractor: a spaCy re-run removes only links
+    spaCy wrote, never the LLM job's, and vice versa. ``UNKNOWN`` covers
+    writes with no extractor (``POST /entities``, ``/batch``, arXiv,
+    multimodal) and every link written before extractors were recorded; it is
+    never reconciled away — only a document delete removes it.
+    """
+
+    SPACY = "spacy"
+    LLM = "llm"
+    UNKNOWN = "unknown"
+
+
+def _entity_document_links_expr(alias: str, members_expr: str) -> str:
+    """Cypher for an Entity's per-extractor document links.
+
+    ``document_links`` holds one ``"<extractor>:<document_id>"`` string per
+    (extractor, document) pair that wrote the node (Neo4j properties cannot
+    hold maps; document ids are UUIDs, so ``:`` never occurs in them).
+    ``document_ids`` stays the plain union every reader and
+    ``delete_document_graph`` already use: a document is a member while any of
+    its links remains. New nodes start with ``[]`` (ON CREATE). A node written
+    before links existed has none, so its current members (``members_expr``)
+    are read as ``unknown:`` links — kept by every reconcile.
+    """
+    return (
+        f"coalesce({alias}.document_links, "
+        f"[d IN {members_expr} | '{GraphExtractor.UNKNOWN.value}:' + d])"
+    )
+
+
+def _append_relationship_extractor_clause(carry: Tuple[str, ...]) -> str:
+    """``WITH … SET`` that records ``$document_extractor`` on edge ``r``.
+
+    A RELATED_TO edge is already per-document (``source_document_id`` is in
+    its MERGE key), so it only needs the set of extractors that asserted it.
+    New edges start with ``[]`` (ON CREATE); an edge written before this has
+    no list and reads as ``['unknown']``, which no reconcile removes.
+    """
+    kept = ", ".join((*carry, "r"))
+    return (
+        f"WITH {kept}, coalesce(r.extractors, "
+        f"['{GraphExtractor.UNKNOWN.value}']) AS existing_extractors\n"
+        f"SET r.extractors = existing_extractors + CASE\n"
+        f"    WHEN $document_extractor IN existing_extractors THEN []\n"
+        f"    ELSE [$document_extractor] END"
+    )
+
+
+def _document_graph_queries(
+    document_id: str,
+    organization_id: Optional[str],
+    extractor: Optional[GraphExtractor] = None,
+    kept_entities: Optional[List[List[str]]] = None,
+    kept_relationships: Optional[List[List[str]]] = None,
+) -> Tuple[str, str, Dict[str, Any]]:
+    """The two statements that remove a document from the graph.
+
+    Without ``extractor`` (``delete_document_graph``) everything of the
+    document goes: all its edges, every link to it, then its membership. With
+    ``extractor`` (``reconcile_document_graph``) only that extractor's links
+    and edge assertions for entities/edges NOT in ``kept_*`` go, and the
+    document stays a member while another extractor's (or an ``unknown``)
+    link to it remains. Both kept lists are bound parameters, never
+    interpolated. Returns ``(rel_query, node_query, params)``.
+    """
+    params: Dict[str, Any] = {
+        "source_document_id": str(document_id),
+        "document_link_suffix": f":{document_id}",
+    }
+    rel_org_filter = ""
+    node_org_filter = ""
+    if organization_id is not None:
+        params["organization_id"] = str(organization_id)
+        rel_org_filter = (
+            "\n                    WHERE (r.organization_id = $organization_id"
+            "\n                        OR r.organization_id IS NULL)"
+        )
+        node_org_filter = (
+            "\n                          (e.organization_id = $organization_id"
+            "\n                        OR e.organization_id IS NULL)"
+            "\n                      AND"
+        )
+    member_ids = _entity_document_ids_expr("e")
+    if extractor is None:
+        # Step 1: this document's relationships (per-document provenance edges).
+        rel_query = f"""
+                    MATCH ()-[r:RELATED_TO {{source_document_id: $source_document_id}}]->(){rel_org_filter}
+                    DELETE r
+                    RETURN count(r) as deleted_count
+                    """
+        # Step 2 head: every member node loses the doc and all of its links.
+        # A comprehension over a null list is null, so legacy nodes (no
+        # document_links) keep reading their members as unknown links.
+        node_head = f"""
+                    MATCH (e:Entity)
+                    WHERE{node_org_filter} $source_document_id IN {member_ids}
+                    WITH e, [d IN {member_ids} WHERE d <> $source_document_id] AS remaining_document_ids
+                    SET e.document_ids = remaining_document_ids,
+                        e.document_links = [l IN e.document_links WHERE NOT l ENDS WITH $document_link_suffix],"""
+    else:
+        if extractor == GraphExtractor.UNKNOWN:
+            raise ValueError("unknown-extractor links are never reconciled")
+        params["document_extractor"] = extractor.value
+        params["document_link"] = f"{extractor.value}:{document_id}"
+        params["kept_entities"] = kept_entities or []
+        params["kept_relationships"] = kept_relationships or []
+        rel_kept_filter = (
+            "\n                      AND"
+            if rel_org_filter
+            else "\n                    WHERE"
+        )
+        # Step 1: withdraw this extractor's assertion from the doc's edges it
+        # no longer emits; delete an edge only when no extractor asserts it.
+        # Legacy edges (no extractors list) never match.
+        rel_query = f"""
+                    MATCH (source)-[r:RELATED_TO {{source_document_id: $source_document_id}}]->(target){rel_org_filter}{rel_kept_filter} $document_extractor IN r.extractors
+                      AND NOT [source.id, target.id, r.type] IN $kept_relationships
+                    SET r.extractors = [x IN r.extractors WHERE x <> $document_extractor],
+                        r.updated_at = datetime()
+                    WITH r
+                    WHERE size(r.extractors) = 0
+                    DELETE r
+                    RETURN count(r) as deleted_count
+                    """
+        # Step 2 head: drop this extractor's link from entities it no longer
+        # emits; the doc leaves document_ids only when no link to it remains.
+        # Legacy nodes (no document_links) never match.
+        node_head = f"""
+                    MATCH (e:Entity)
+                    WHERE{node_org_filter} $document_link IN e.document_links
+                      AND NOT [e.type, e.canonical_key] IN $kept_entities
+                    WITH e, [l IN e.document_links WHERE l <> $document_link] AS remaining_document_links
+                    WITH e, remaining_document_links, CASE
+                        WHEN any(l IN remaining_document_links WHERE l ENDS WITH $document_link_suffix)
+                        THEN {member_ids}
+                        ELSE [d IN {member_ids} WHERE d <> $source_document_id] END AS remaining_document_ids
+                    SET e.document_ids = remaining_document_ids,
+                        e.document_links = remaining_document_links,"""
+    # Step 2 tail: re-point the creator stamp if the doc left, then delete
+    # only nodes left with NO document AND no relationships. All three guards
+    # are load-bearing: the membership guard keeps nodes other docs still
+    # mention (KN2); the non-null source_document_id guard keeps nodes that
+    # were created without any document; the COUNT { (e)--() } = 0 orphan
+    # guard keeps nodes other docs' edges still touch.
+    node_query = node_head + """
+                        e.source_document_id = CASE
+                            WHEN e.source_document_id = $source_document_id
+                                 AND NOT $source_document_id IN remaining_document_ids
+                                 AND size(remaining_document_ids) > 0
+                            THEN remaining_document_ids[0]
+                            ELSE e.source_document_id END,
+                        e.updated_at = datetime()
+                    WITH e, remaining_document_ids
+                    WHERE size(remaining_document_ids) = 0
+                      AND e.source_document_id IS NOT NULL
+                      AND COUNT { (e)--() } = 0
+                    DELETE e
+                    RETURN count(e) as deleted_count
+                    """
+    return rel_query, node_query, params
 
 
 def _safe_relationship_type(value: Optional[str]) -> RelationshipType:
@@ -485,8 +703,17 @@ class KnowledgeGraphService:
         pass
 
     # Entity Management
-    def create_entity(self, request: CreateEntityRequest) -> EntityResponse:
-        """Create a new entity in the knowledge graph"""
+    def create_entity(
+        self,
+        request: CreateEntityRequest,
+        *,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
+    ) -> EntityResponse:
+        """Create a new entity in the knowledge graph.
+
+        ``extractor`` records which pipeline wrote the document link (see
+        :class:`GraphExtractor`); callers without one keep ``UNKNOWN``.
+        """
         if not request.name or not request.name.strip():
             raise ValueError("Entity name cannot be blank or whitespace-only")
         request.name = request.name.strip()
@@ -507,6 +734,9 @@ class KnowledgeGraphService:
                 # stored property therefore equals the key (never re-set to null
                 # in ON CREATE/ON MATCH, which would desync key and property and
                 # cause duplicate nodes on the next MERGE).
+                # source_document_id stays the ON CREATE creator stamp (reads
+                # key on it); document_ids is the per-document reference count
+                # that every write — create or match — appends to (KN2).
                 query = f"""
                 MERGE (e:Entity:{request.entity_type.value} {{canonical_key: $canonical_key, type: $entity_type, organization_id: $org_key}})
                 ON CREATE SET
@@ -518,6 +748,7 @@ class KnowledgeGraphService:
                     e.context = $context,
                     e.metadata = $metadata,
                     e.source_document_id = $source_document_id,
+                    e.document_links = [],
                     e.created_at = datetime(),
                     e.updated_at = datetime()
                 ON MATCH SET
@@ -526,6 +757,7 @@ class KnowledgeGraphService:
                     e.confidence_score = CASE
                         WHEN $confidence_score > e.confidence_score THEN $confidence_score
                         ELSE e.confidence_score END
+                {_append_entity_document_id_clause("e", "[$source_document_id]")}
                 RETURN e.id AS resolved_id, e.created_at AS created_at, e.updated_at AS updated_at
                 """
 
@@ -545,6 +777,7 @@ class KnowledgeGraphService:
                         ),
                         "source_document_id": request.source_document_id,
                         "org_key": getattr(request, "organization_id", None) or "",
+                        "document_extractor": extractor.value,
                     },
                 )
 
@@ -754,22 +987,41 @@ class KnowledgeGraphService:
         the node's creator. Only RELATED_TO relationships carry true per-document
         provenance (``r.source_document_id`` is part of their MERGE key).
 
+        Since the spaCy ingestion fan-out writes nodes only (never edges), the
+        creator stamp alone was not enough: with docs A and B both naming
+        "BERT" and A ingested first, deleting A deleted the shared node and B
+        silently lost the entity while its ``neo4j_index_status`` stayed
+        ``completed`` (audit KN2). Every entity write path therefore also
+        appends the writing document to ``e.document_ids`` — a per-document
+        reference count — and this method subtracts from it.
+
         So this deletes in two steps, inside one transaction:
 
         1. DELETE this document's *relationships* (``r.source_document_id`` =
            the doc id) — the per-document part of the graph.
-        2. DELETE only entity *nodes* that this document created
-           (``e.source_document_id``) AND that are now fully orphaned
-           (``COUNT { (e)--() } = 0`` — no remaining relationships from any
-           document; Neo4j 5.x syntax, dev runs 5.26). Plain ``DELETE`` (not
-           ``DETACH``) so if the orphan guard ever regresses, Neo4j raises on a
-           still-connected node instead of silently destroying shared data.
+        2. For every entity node whose effective membership list
+           (``_entity_document_ids_expr``: ``document_ids``, or
+           ``[source_document_id]`` on legacy nodes) contains this doc, remove
+           the doc id from ``document_ids``. If the node's creator stamp was
+           this doc and other documents remain, re-point
+           ``source_document_id`` to one of them so doc-scoped reads keep
+           finding it. Then DELETE only the nodes with NO remaining document
+           AND no relationships (``COUNT { (e)--() } = 0`` — Neo4j 5.x syntax,
+           dev runs 5.26). Plain ``DELETE`` (not ``DETACH``) so if the orphan
+           guard ever regresses, Neo4j raises on a still-connected node instead
+           of silently destroying shared data.
 
-        A node created by this doc but still connected via another doc survives
-        (that doc still references it) — its ``source_document_id`` then points
-        at a deleted document; harmless for reads, and a future reconciler can
-        re-stamp it. A node created by another doc keeps living even if all of
-        this doc's relationships to it are removed in step 1.
+        A node still referenced by another document survives (its membership
+        list is non-empty). A node with no remaining document but still
+        connected via another doc's edges survives too; its
+        ``source_document_id`` may then point at a deleted document — harmless
+        for reads. Legacy nodes (no ``document_ids``) behave exactly as before
+        this change: they die only when this doc created them and they are
+        orphaned. A node created without any document (``POST /entities`` with
+        no source, the arXiv path) has a null ``source_document_id`` and is never
+        deleted here, even after a document later named it and was deleted —
+        the same protection the old creator-anchored match gave it. No data
+        migration is attempted here.
 
         ``source_document_id`` is globally unique to one document in one org, so
         both steps are already tenant-isolated; the ``organization_id``
@@ -778,42 +1030,116 @@ class KnowledgeGraphService:
         is still reaped. They are AND'd with the doc anchor (never OR — that
         would widen the delete to the whole org's graph); this deliberately does
         NOT reuse ``_entity_scope_predicate``, whose OR semantics are for read
-        breadth.
+        breadth. List containment is not index-backed, so step 2 is an
+        org-index-narrowed scan (a label scan when ``organization_id`` is
+        None); document deletes are rare enough for that.
 
         Returns ``(deleted_relationships, deleted_nodes)``. Raises on driver /
         circuit breaker failure; callers isolate it (best-effort at the delete
         endpoint).
         """
-        params: Dict[str, Any] = {"source_document_id": str(document_id)}
-        rel_org_filter = ""
-        node_org_filter = ""
-        if organization_id is not None:
-            params["organization_id"] = str(organization_id)
-            rel_org_filter = (
-                "\n                    WHERE (r.organization_id = $organization_id"
-                "\n                        OR r.organization_id IS NULL)"
-            )
-            node_org_filter = (
-                "\n                          (e.organization_id = $organization_id"
-                "\n                        OR e.organization_id IS NULL)"
-                "\n                      AND"
-            )
-        # Step 1: this document's relationships (per-document provenance edges).
-        rel_query = f"""
-                    MATCH ()-[r:RELATED_TO {{source_document_id: $source_document_id}}]->(){rel_org_filter}
-                    DELETE r
-                    RETURN count(r) as deleted_count
-                    """
-        # Step 2: nodes this doc created that no document references any more.
-        # The COUNT {{ (e)--() }} = 0 orphan guard is load-bearing: without it,
-        # deleting a creator doc destroys nodes still wired to other docs.
-        node_query = f"""
-                    MATCH (e:Entity {{source_document_id: $source_document_id}})
-                    WHERE{node_org_filter} COUNT {{ (e)--() }} = 0
-                    DELETE e
-                    RETURN count(e) as deleted_count
-                    """
+        rel_query, node_query, params = _document_graph_queries(
+            document_id, organization_id
+        )
+        deleted_relationships, deleted_nodes = self._run_document_graph_queries(
+            rel_query, node_query, params
+        )
+        logger.info(
+            "Deleted %d graph relationships and %d orphaned entities "
+            "for document %s (org=%s)",
+            deleted_relationships,
+            deleted_nodes,
+            document_id,
+            organization_id,
+        )
+        return deleted_relationships, deleted_nodes
 
+    def reconcile_document_graph(
+        self,
+        document_id: str,
+        organization_id: Optional[str],
+        *,
+        extractor: GraphExtractor,
+        entities: Sequence[CreateEntityRequest],
+        relationships: Sequence[CreateRelationshipRequest],
+    ) -> Tuple[int, int]:
+        """Drop the graph links ``extractor`` no longer emits for a document.
+
+        Entity writes only append to ``e.document_ids`` (KN2), so re-extracting
+        a document that stopped naming X left the document in X's membership
+        and its per-document X edges in place: X stayed alive and, when this
+        document created it, visible in the document's scoped graph. Call this
+        after a *complete, error-free* re-extraction has been written, passing
+        the requests that were written. It diffs instead of replacing, so
+        entities still emitted keep their ids and creator stamps, and it is
+        scoped to ``extractor`` (see :class:`GraphExtractor`): a spaCy re-run
+        never removes what the LLM job wrote for the same document, or the
+        reverse. In one transaction it:
+
+        1. withdraws ``extractor`` from this document's RELATED_TO edges whose
+           ``[source.id, target.id, type]`` is not among ``relationships``,
+           deleting an edge only when no extractor asserts it any more;
+        2. removes the ``extractor:document`` link from entities whose
+           ``[type, canonical_key]`` is not among ``entities``. The document
+           leaves ``document_ids`` only when no other link to it remains; then
+           ``delete_document_graph``'s step 2 applies (re-point the creator
+           stamp, delete only nodes with no document, a non-null stamp and no
+           edges).
+
+        ``unknown`` links and extractor lists — writes without an extractor and
+        everything written before links were recorded — never match, so they
+        are kept. Legacy nodes/edges missing a key compare as null and are kept
+        too. ``extractor`` must not be ``UNKNOWN`` (ValueError). An empty
+        ``entities`` list is a no-op: an extraction that found nothing is far
+        more likely an extractor fault than a document that names nothing, and
+        reconciling it would strip the whole document.
+
+        Returns ``(deleted_relationships, deleted_nodes)``. Raises on driver /
+        circuit breaker failure; callers isolate it (the document then keeps
+        its stale membership, i.e. the pre-reconcile behaviour).
+        """
+        if extractor == GraphExtractor.UNKNOWN:
+            raise ValueError("unknown-extractor links are never reconciled")
+        kept_entities: List[List[str]] = []
+        for entity in entities:
+            key = [entity.entity_type.value, (entity.name or "").strip().lower()]
+            if key[1] and key not in kept_entities:
+                kept_entities.append(key)
+        if not kept_entities:
+            logger.info(
+                "Skipping graph reconcile for document %s: extraction emitted "
+                "no entities",
+                document_id,
+            )
+            return 0, 0
+        kept_relationships = [
+            [rel.source_entity_id, rel.target_entity_id, rel.relationship_type.value]
+            for rel in relationships
+        ]
+        rel_query, node_query, params = _document_graph_queries(
+            document_id,
+            organization_id,
+            extractor=extractor,
+            kept_entities=kept_entities,
+            kept_relationships=kept_relationships,
+        )
+        deleted_relationships, deleted_nodes = self._run_document_graph_queries(
+            rel_query, node_query, params
+        )
+        logger.info(
+            "Reconciled document %s graph (org=%s, extractor=%s): removed %d "
+            "stale relationships and %d orphaned entities",
+            document_id,
+            organization_id,
+            extractor.value,
+            deleted_relationships,
+            deleted_nodes,
+        )
+        return deleted_relationships, deleted_nodes
+
+    def _run_document_graph_queries(
+        self, rel_query: str, node_query: str, params: Dict[str, Any]
+    ) -> Tuple[int, int]:
         with self.get_session() as session:
             # One explicit transaction: step 2's orphan check must observe
             # step 1's deletions, and a failure between steps must not strand
@@ -824,16 +1150,7 @@ class KnowledgeGraphService:
                 deleted_relationships = rel_record["deleted_count"] if rel_record else 0
                 node_record = tx.run(node_query, params).single()
                 deleted_nodes = node_record["deleted_count"] if node_record else 0
-
-            logger.info(
-                "Deleted %d graph relationships and %d orphaned entities "
-                "for document %s (org=%s)",
-                deleted_relationships,
-                deleted_nodes,
-                document_id,
-                organization_id,
-            )
-            return deleted_relationships, deleted_nodes
+        return deleted_relationships, deleted_nodes
 
     def search_entities(
         self,
@@ -842,8 +1159,14 @@ class KnowledgeGraphService:
         limit: int = 50,
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
+        require_source_document: bool = False,
     ) -> List[EntityResponse]:
-        """Search for entities by name or properties, optionally scoped to organization documents"""
+        """Search for entities by name or properties, optionally scoped to organization documents
+
+        ``require_source_document`` keeps only entities that carry a
+        ``source_document_id``, applied in the query so ``limit`` counts only
+        those (callers that map entities to documents need it).
+        """
         try:
             with self.get_session() as session:
                 query_str = (query or "").strip()
@@ -858,6 +1181,11 @@ class KnowledgeGraphService:
                 if entity_types:
                     filters.append("e.type IN $entity_types")
                     params["entity_types"] = [t.value for t in entity_types]
+                if require_source_document:
+                    filters.append(
+                        "e.source_document_id IS NOT NULL"
+                        " AND e.source_document_id <> ''"
+                    )
 
                 result = None
                 if query_str:
@@ -1179,6 +1507,8 @@ class KnowledgeGraphService:
         self,
         request: CreateRelationshipRequest,
         source_document_ids: Optional[List[str]] = None,
+        *,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> RelationshipResponse:
         """Create a new relationship between entities, optionally scoped to organization documents"""
         start_time = time.time()
@@ -1228,6 +1558,7 @@ class KnowledgeGraphService:
                     r.evidence = $evidence,
                     r.metadata = $metadata,
                     r.organization_id = $organization_id,
+                    r.extractors = [],
                     r.created_at = datetime(),
                     r.updated_at = datetime()
                 ON MATCH SET
@@ -1238,6 +1569,7 @@ class KnowledgeGraphService:
                     r.metadata = $metadata,
                     r.organization_id = coalesce(r.organization_id, $organization_id),
                     r.updated_at = datetime()
+                {_append_relationship_extractor_clause(("source", "target"))}
                 RETURN r, source, target
                 LIMIT 1
                 """
@@ -1265,6 +1597,7 @@ class KnowledgeGraphService:
                     "source_document_id": request.source_document_id or "",
                     # Edge org (non-key property; null allowed for org-less edges).
                     "organization_id": request.organization_id,
+                    "document_extractor": extractor.value,
                 }
                 if source_document_ids is not None:
                     params["source_document_ids"] = source_document_ids
@@ -1995,8 +2328,15 @@ class KnowledgeGraphService:
         self,
         request: BatchEntityRequest,
         source_document_ids: Optional[List[str]] = None,
+        *,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> BatchEntityResponse:
-        """Create multiple entities and relationships in a batch"""
+        """Create multiple entities and relationships in a batch.
+
+        ``extractor`` is recorded on every document link and edge written (see
+        :class:`GraphExtractor`); full re-extractions pass theirs so
+        ``reconcile_document_graph`` can later scope to it.
+        """
         start_time = time.time()
         response = BatchEntityResponse()
 
@@ -2005,14 +2345,16 @@ class KnowledgeGraphService:
                 with session.begin_transaction() as tx:
                     # Create entities in ONE UNWIND batch (single round-trip for
                     # all entities); fall back to per-entity on any error.
-                    batched = self._batch_merge_entities(tx, request.entities)
+                    batched = self._batch_merge_entities(
+                        tx, request.entities, extractor
+                    )
                     if batched is not None:
                         response.created_entities.extend(batched)
                     else:
                         for entity_req in request.entities:
                             try:
                                 entity = self._create_entity_in_transaction(
-                                    tx, entity_req
+                                    tx, entity_req, extractor
                                 )
                                 if entity:
                                     response.created_entities.append(entity)
@@ -2029,7 +2371,7 @@ class KnowledgeGraphService:
                     for rel_req in request.relationships:
                         try:
                             relationship = self._create_relationship_in_transaction(
-                                tx, rel_req
+                                tx, rel_req, extractor
                             )
                             if relationship:
                                 response.created_relationships.append(relationship)
@@ -2054,7 +2396,9 @@ class KnowledgeGraphService:
             response.errors.append({"type": "batch_processing_error", "error": str(e)})
             return response
 
-    def _batch_merge_entities(self, tx, entities) -> Optional[List[EntityResponse]]:
+    def _batch_merge_entities(
+        self, tx, entities, extractor: GraphExtractor = GraphExtractor.UNKNOWN
+    ) -> Optional[List[EntityResponse]]:
         """MERGE all entities in a single UNWIND (one round-trip) via
         apoc.merge.node (dynamic :Entity:<type> label). Returns the created
         EntityResponse list, or None if anything goes wrong (caller falls back
@@ -2082,19 +2426,40 @@ class KnowledgeGraphService:
                         "context": e.context,
                         "metadata": json.dumps(e.metadata) if e.metadata else "{}",
                         "source_document_id": e.source_document_id,
+                        # Per-extractor links start empty; the trailing
+                        # append records this batch's extractor.
+                        "document_links": [],
                         # Equal to the identity-map org so the stored property
                         # never desyncs from the MERGE key.
                         "organization_id": org_key,
                     },
                 }
             )
+        # Every document in this batch that names a node, keyed like the
+        # apoc.merge identity map below (de-duplicated, first-seen order).
+        docs_by_node: Dict[Tuple[str, str, str], List[str]] = {}
+        for row, e in zip(rows, valid):
+            key = (row["etype"], row["canonical_key"], row["org_key"])
+            node_docs = docs_by_node.setdefault(key, [])
+            if e.source_document_id and e.source_document_id not in node_docs:
+                node_docs.append(e.source_document_id)
+        for row in rows:
+            row["document_ids"] = docs_by_node[
+                (row["etype"], row["canonical_key"], row["org_key"])
+            ]
         # organization_id is part of the apoc.merge identity map (matches the
         # entity_canonical_org_unique constraint) so two orgs' same name+type
         # entities are separate nodes. Coalesced to "" since the key can't be null.
-        query = """
+        # row.props.source_document_id is the ON CREATE creator stamp; the
+        # trailing WITH/SET appends row.document_ids to node.document_ids on
+        # create AND match (KN2 reference count). Rows that merge into the same
+        # node may read the pre-batch list, so each row carries EVERY document
+        # in this batch that names its node: whichever row writes last, the
+        # node ends up with all of them.
+        query = f"""
         UNWIND $rows AS row
         CALL apoc.merge.node(['Entity', row.etype],
-            {canonical_key: row.canonical_key, type: row.etype, organization_id: row.org_key},
+            {{canonical_key: row.canonical_key, type: row.etype, organization_id: row.org_key}},
             row.props) YIELD node
         SET node.created_at = coalesce(node.created_at, datetime()),
             node.updated_at = datetime(),
@@ -2102,10 +2467,16 @@ class KnowledgeGraphService:
             node.confidence_score = CASE
                 WHEN row.props.confidence_score > coalesce(node.confidence_score, 0.0)
                 THEN row.props.confidence_score ELSE node.confidence_score END
+        {_append_entity_document_id_clause("node", "row.document_ids", ("row",))}
         RETURN row.idx AS idx, node.id AS id
         """
         try:
-            id_by_idx = {rec["idx"]: rec["id"] for rec in tx.run(query, {"rows": rows})}
+            id_by_idx = {
+                rec["idx"]: rec["id"]
+                for rec in tx.run(
+                    query, {"rows": rows, "document_extractor": extractor.value}
+                )
+            }
         except Exception as e:
             logger.warning(
                 "Batch UNWIND entity merge failed, falling back per-entity: %s", e
@@ -2131,7 +2502,10 @@ class KnowledgeGraphService:
         return out
 
     def _create_entity_in_transaction(
-        self, tx, request: CreateEntityRequest
+        self,
+        tx,
+        request: CreateEntityRequest,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> Optional[EntityResponse]:
         """Helper to create entity within a transaction"""
         if not request.name or not request.name.strip():
@@ -2145,7 +2519,8 @@ class KnowledgeGraphService:
         # ingest of the same entity dedup onto one node (backed by the
         # entity_canonical_org_unique constraint) while keeping two orgs'
         # same-name entities separate. org_key coalesced to "" (Cypher can't
-        # MERGE on null); the stored property equals the key.
+        # MERGE on null); the stored property equals the key. document_ids is
+        # the per-document reference count appended on create AND match (KN2).
         query = f"""
         MERGE (e:Entity:{request.entity_type.value} {{canonical_key: $canonical_key, type: $entity_type, organization_id: $org_key}})
         ON CREATE SET
@@ -2157,6 +2532,7 @@ class KnowledgeGraphService:
             e.context = $context,
             e.metadata = $metadata,
             e.source_document_id = $source_document_id,
+            e.document_links = [],
             e.created_at = datetime(),
             e.updated_at = datetime()
         ON MATCH SET
@@ -2165,6 +2541,7 @@ class KnowledgeGraphService:
             e.confidence_score = CASE
                 WHEN $confidence_score > e.confidence_score THEN $confidence_score
                 ELSE e.confidence_score END
+        {_append_entity_document_id_clause("e", "[$source_document_id]")}
         RETURN e.id AS resolved_id
         """
 
@@ -2182,6 +2559,7 @@ class KnowledgeGraphService:
                 "metadata": json.dumps(request.metadata) if request.metadata else "{}",
                 "source_document_id": request.source_document_id,
                 "org_key": getattr(request, "organization_id", None) or "",
+                "document_extractor": extractor.value,
             },
         )
 
@@ -2204,7 +2582,10 @@ class KnowledgeGraphService:
         )
 
     def _create_relationship_in_transaction(
-        self, tx, request: CreateRelationshipRequest
+        self,
+        tx,
+        request: CreateRelationshipRequest,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> Optional[RelationshipResponse]:
         """Helper to create relationship within a transaction"""
         relationship_id = str(uuid.uuid4())
@@ -2244,6 +2625,7 @@ class KnowledgeGraphService:
             r.evidence = $evidence,
             r.metadata = $metadata,
             r.organization_id = $organization_id,
+            r.extractors = [],
             r.created_at = datetime(),
             r.updated_at = datetime()
         ON MATCH SET
@@ -2254,6 +2636,7 @@ class KnowledgeGraphService:
             r.metadata = $metadata,
             r.organization_id = coalesce(r.organization_id, $organization_id),
             r.updated_at = datetime()
+        {_append_relationship_extractor_clause(())}
         RETURN r
         LIMIT 1
         """
@@ -2277,6 +2660,7 @@ class KnowledgeGraphService:
                 # Coalesced to "" so it can serve as a MERGE key.
                 "source_document_id": request.source_document_id or "",
                 "organization_id": request.organization_id,
+                "document_extractor": extractor.value,
             },
         )
 
@@ -2604,9 +2988,39 @@ class KnowledgeGraphService:
 
         start_time = time.time()
 
-        # Derive tenant scope
-        source_document_ids = None
-        if organization_id and db:
+        query_text = search_request.query if search_request else ""
+        limit = getattr(search_request, "limit", 20)
+        offset = getattr(search_request, "offset", 0)
+        search_type = (
+            SearchTypeEnum.KNOWLEDGE_GRAPH
+            if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
+            else "knowledge_graph"
+        )
+
+        if not organization_id:
+            # Fail closed: without a tenant, search_entities would run the
+            # unscoped branch of _entity_scope_predicate across every org.
+            logger.error("Knowledge graph search refused: no organization_id")
+            return SearchResponse(
+                query=query_text,
+                search_id=str(uuid.uuid4()),
+                search_type=search_type,
+                results=[],
+                total_results=0,
+                returned_results=0,
+                search_time_ms=(time.time() - start_time) * 1000,
+                limit=limit,
+                offset=offset,
+                has_more=False,
+            )
+
+        # Tenant scope: the indexed ``e.organization_id`` equality, OR'd with
+        # the org's document ids so entities in an environment whose
+        # organization_id backfill has not run still match (see
+        # _entity_scope_predicate). A failed lookup is logged and leaves the
+        # org equality as the only scope; it never widens to unscoped.
+        source_document_ids: Optional[List[str]] = None
+        if db is not None:
             try:
                 from src.models.document import Document
 
@@ -2616,29 +3030,33 @@ class KnowledgeGraphService:
                     .filter(Document.organization_id == organization_id)
                     .all()
                 ]
-            except Exception:
-                pass
-
-        query_text = search_request.query if search_request else ""
-        limit = getattr(search_request, "limit", 20)
-
-        # Pass organization_id directly, not only the derived doc-id list: if the
-        # doc-id lookup above threw, source_document_ids is None and passing only
-        # that would run unscoped across all tenants. The indexed organization_id
-        # equality is the primary scope.
+            except Exception as e:
+                logger.warning(
+                    "Knowledge graph search: org document lookup failed, "
+                    "scoping by organization_id only: %s",
+                    e,
+                )
         entities = self.search_entities(
             query_text,
             limit=limit,
             source_document_ids=source_document_ids,
             organization_id=organization_id,
+            # Filter source-less entities in the query, before LIMIT, so they
+            # cannot crowd document-backed matches out of the page.
+            require_source_document=True,
         )
 
         results = []
         now = datetime.utcnow()
         for entity in entities:
+            # Entities live in a different id space than Document rows. Only an
+            # entity carrying its source document can be returned as a
+            # document-level result; never fabricate a document_id.
+            if not entity.source_document_id:
+                continue
             results.append(
                 SearchResultModel(
-                    document_id=entity.source_document_id or str(uuid.uuid4()),
+                    document_id=str(entity.source_document_id),
                     title=entity.name,
                     document_type=DocumentType.TEXT,
                     content_preview=entity.context or "",
@@ -2663,17 +3081,13 @@ class KnowledgeGraphService:
         return SearchResponse(
             query=query_text,
             search_id=str(uuid.uuid4()),
-            search_type=(
-                SearchTypeEnum.KNOWLEDGE_GRAPH
-                if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
-                else "knowledge_graph"
-            ),
+            search_type=search_type,
             results=results,
             total_results=len(results),
             returned_results=len(results),
             search_time_ms=search_time_ms,
             limit=limit,
-            offset=getattr(search_request, "offset", 0),
+            offset=offset,
             has_more=False,
         )
 
@@ -2685,10 +3099,12 @@ class KnowledgeGraphService:
         confidence: float = 0.8,
         metadata: str = "",
         organization_id: str = None,
+        extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> Optional[str]:
         """Adapter for legacy callers that expect create_entity_node.
 
-        Returns the entity ID on success, None on failure.
+        ``extractor`` is recorded on the document link (the ingestion fan-out
+        passes ``SPACY``). Returns the entity ID on success, None on failure.
         """
         try:
             request = CreateEntityRequest(
@@ -2700,7 +3116,7 @@ class KnowledgeGraphService:
                 source_document_id=document_id,
                 organization_id=organization_id,
             )
-            result = self.create_entity(request)
+            result = self.create_entity(request, extractor=extractor)
             return result.id if result else None
         except Exception as e:
             logger.error(f"Error in create_entity_node adapter: {e}")

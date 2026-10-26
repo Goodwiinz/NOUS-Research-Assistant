@@ -1,5 +1,7 @@
 # Performance Optimization Implementation Guide
 
+> **Status: historical (reconciled 2026-10-17).** This implementation guide is a point-in-time record; its targets and rollout steps were not re-verified. Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Start with the [AWS deployment overview](../deployment/aws-overview.md) and [AWS on-call commands](aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 ## Overview
 
 This guide provides comprehensive instructions for implementing and deploying the performance optimizations across the Multimodal Enterprise RAG System. The optimizations are designed to achieve sub-100ms response times for real-time status streaming.

@@ -1,5 +1,7 @@
 # Qdrant Removal — Migration Status
 
+> **Amendment 2026-10-17:** this status record was written on its 2026-06-08 audit date and is preserved as history. Current state: `DO_KB_ENABLED` defaults to `False` (`backend/src/core/config.py`), so DO KB is not the live retrieval backend. Live retrieval is PostgreSQL full-text search (`backend/src/services/search/fulltext_search_service.py`, `keyword_search_service.py`); pgvector semantic search is flag-gated and off by default; Qdrant is fully removed. Several items below marked outstanding may since have been resolved in code (for example `hybrid_search_service.py` now documents that its vector arm was retired); check the code and `docs/engineering/gotchas.md` before acting on any checkbox.
+
 Qdrant was dropped; **DO KB (DigitalOcean Knowledge Base)** is the retrieval backend.
 This tracks what's done vs. outstanding. Audit date: 2026-06-08.
 

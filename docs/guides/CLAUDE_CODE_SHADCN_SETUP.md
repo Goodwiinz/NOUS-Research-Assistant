@@ -1,5 +1,7 @@
 # Claude Code shadcn/ui MCP Server Integration
 
+> **Dated 2026-10-17: this is a one-off IDE setup status note kept for reference. The consolidated shadcn/ui MCP setup guide is [SHADCN_MCP_SETUP.md](SHADCN_MCP_SETUP.md); prefer it. Check the tool's current documentation before running any command here.**
+
 ## ✅ Setup Complete
 
 Your Claude Code has been successfully configured with the **official** shadcn/ui MCP Server! Here's what was configured:
@@ -219,4 +221,4 @@ The integration is seamless and ready to use! You now have access to the entire 
 - [Official shadcn/ui MCP Docs](https://ui.shadcn.com/docs/mcp) - Official MCP documentation
 - [shadcn/ui Documentation](https://ui.shadcn.com/) - Official component docs
 - [Cursor Setup Guide](./CURSOR_SHADCN_SETUP.md) - For Cursor IDE integration
-- [Project Documentation](./docs/README.md) - Your RAG system docs
+- [Project Documentation](../README.md) - Your RAG system docs

@@ -1,5 +1,7 @@
 # E2E Testing Framework Implementation Summary
 
+> **Stale (2026-10-17): an implementation summary for an earlier E2E setup. Its `npm` commands do not match the repository, which uses `pnpm` (for example `pnpm --dir tests/e2e exec playwright test --project=chromium`). See the [testing contract](../engineering/testing.md).**
+
 ## 🎯 Phase 8: End-to-End Testing - User Journey Validation - IMPLEMENTATION COMPLETE
 
 This comprehensive E2E testing framework validates complete user workflows across the Knowledge Graph Analytics Dashboard system with industry-leading testing practices and comprehensive coverage.

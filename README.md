@@ -6,7 +6,7 @@
 
 **Search your documents, inspect the sources, and organize research through an agent with human approval.**
 
-[Showcase & screenshots](https://goodwiins.github.io/nous/) · [Source code](https://github.com/Goodwiinz/rag) · [Terminal client](https://github.com/Goodwiinz/nous-cli) · [Evaluation evidence](evals/README.md)
+[Showcase & screenshots](https://goodwiins.github.io/nous/) · [Source code](https://github.com/Goodwiinz/NOUS-Research-Assistant) · [Terminal client](terminal/README.md) · [Evaluation evidence](evals/README.md)
 
 </div>
 
@@ -14,7 +14,7 @@
 
 NOUS brings document search, cited answers, research projects, and agent actions into one workspace. It is built for working through a collection of papers or internal documents: find relevant material, inspect the supporting sources, and save useful documents and notes to a project.
 
-The web application combines a Next.js / TypeScript frontend with a FastAPI / LangGraph backend. A separate [TypeScript CLI](https://github.com/Goodwiinz/nous-cli) connects to the same backend for streamed conversations and tool approvals.
+The web application combines a Next.js / TypeScript frontend with a FastAPI / LangGraph backend. A TypeScript terminal client in this repository ([`terminal/`](terminal/README.md), launched with [`./nous`](nous)) connects to the same backend for streamed conversations and tool approvals. A separate [nous-cli](https://github.com/Goodwiinz/nous-cli) repository also exists for the same backend.
 
 Built by **Abdel El Bikha ([@goodwiins](https://github.com/goodwiins))** under [Goodwiinz](https://github.com/Goodwiinz), spanning the frontend, backend, agent orchestration, and evaluation work.
 
@@ -28,7 +28,7 @@ Built by **Abdel El Bikha ([@goodwiins](https://github.com/goodwiins))** under [
 | Agent actions | Ask the agent to create a project, attach documents, or save notes; approve gated actions before execution. | LangGraph tool orchestration, interrupts, and persisted project state. |
 | Research workspace | Organize documents and notes; access bibliography and draft tools in one project. | Project APIs, document management, and frontend state reconciliation. |
 | Streaming conversations | Follow the response and tool activity as a run progresses. | Server-sent events, thread state, and PostgreSQL checkpoints. |
-| Terminal access | Use the shared agent backend from a CLI. | Browser-based authentication flow, streamed events, and confirmation handling in [nous-cli](https://github.com/Goodwiinz/nous-cli). |
+| Terminal access | Use the shared agent backend from a CLI. | Browser-based authentication flow, streamed events, and confirmation handling in the in-repo [terminal client](terminal/README.md) (and the standalone [nous-cli](https://github.com/Goodwiinz/nous-cli) repository). |
 
 Additional implementations include arXiv ingestion, knowledge-graph exploration, memory, multimodal processing, and writing workflows. Their presence in the repository does not establish end-to-end reliability; see [evaluation status](#evaluation-evidence).
 
@@ -80,11 +80,11 @@ flowchart TD
 | --- | --- |
 | Web | Next.js, React, TypeScript, Tailwind, Zustand, TanStack Query; chat, documents, projects, and citations. |
 | API and agents | FastAPI, Pydantic, LangGraph; request validation, tool routing, approvals, streaming, and checkpoints. |
-| Retrieval | PostgreSQL full-text search, optional DigitalOcean Knowledge Base integration, graph services, and configurable reranking. |
+| Retrieval | PostgreSQL full-text search, an optional DigitalOcean Knowledge Base integration (off in the current dev deployment), graph services, and configurable reranking. |
 | Data and processing | PostgreSQL, Neo4j, Redis, Celery, and configurable object storage. |
 | Operations | Docker Compose, Kubernetes / Helm, Terraform, GitHub Actions, structured logs, and tracing integrations. |
 
-**Retrieval configuration matters.** The [operational notes](docs/engineering/gotchas.md) document the migration away from Qdrant and a development deployment using PostgreSQL full-text retrieval with DigitalOcean KB disabled. Vector retrieval and reranking should be described according to the enabled configuration, rather than assumed to run on every query.
+**Retrieval configuration matters.** The [operational notes](docs/engineering/gotchas.md) document the migration away from Qdrant and the dev deployment using PostgreSQL full-text retrieval with DigitalOcean KB disabled (`DO_KB_ENABLED=false` in `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml`). Vector retrieval and reranking should be described according to the enabled configuration, rather than assumed to run on every query.
 
 ### Engineering decisions
 
@@ -121,16 +121,16 @@ This is a multi-service application. Backend and integration features need a con
 Use **Node 24** and **pnpm 10.18.2**, as pinned in [package.json](package.json).
 
 ```bash
-git clone --branch develop https://github.com/Goodwiinz/rag.git nous
+git clone --branch develop https://github.com/Goodwiinz/NOUS-Research-Assistant.git nous
 cd nous
 corepack enable
 pnpm install --frozen-lockfile
 cp frontend/.env.example frontend/.env.local
 # Configure the frontend environment for your backend.
-pnpm dev
+pnpm --dir frontend dev:offline
 ```
 
-The frontend starts at `http://localhost:3000`. A running frontend alone does not provide document search or agent execution.
+The frontend starts at `http://localhost:3000`. Use `dev:offline` rather than `pnpm dev`: the `dev` script wraps `infisical run` and needs an Infisical login. A running frontend alone does not provide document search or agent execution.
 
 ### Backend and supporting services
 
@@ -173,8 +173,10 @@ See [engineering standards](docs/engineering/README.md) for the distinction betw
 | [evals/](evals/) | Agent tasks, verifiers, baseline results, and evaluation methodology. |
 | [docs/engineering/](docs/engineering/) | Current engineering contracts and operational notes. |
 | [docs/architecture/](docs/architecture/) | Architecture reports and design background. |
-| [docs/deployment/](docs/deployment/) | Deployment configurations and runbooks. |
+| [docs/deployment/](docs/deployment/) | Deployment guides, runbooks and dated release notes; several describe earlier setups. |
+| [deployment/](deployment/), [infrastructure/](infrastructure/) | Helm charts, ArgoCD, Terraform and Kubernetes configuration. |
 | [brand/](brand/) | Product identity, screenshots, and presentation assets. |
-| [Goodwiinz/nous-cli](https://github.com/Goodwiinz/nous-cli) | Separate terminal client for the shared backend. |
+| [terminal/](terminal/), [`./nous`](nous) | Terminal client for the shared backend, launched from this checkout. |
+| [Goodwiinz/nous-cli](https://github.com/Goodwiinz/nous-cli) | Separate standalone CLI repository for the same backend. |
 
 Some older documents describe earlier implementations. Check their dates and compare operational claims with current code and configuration.

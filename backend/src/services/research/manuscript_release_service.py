@@ -7,6 +7,8 @@ protocol and figure provenance, and every check result. A verified release
 promotes exactly one candidate: the snapshot is rebuilt from current data and
 must hash-equal, the obligations are re-evaluated fresh (the candidate's
 stored checks are never trusted), and the package bytes are copied unchanged.
+The manuscript's PRISMA version metadata excludes its packaging and venue
+journals; the project's audit-bundle hash includes those bookkeeping events.
 
 Lock order for both writers: the route's ``resolve_project`` (Workspace SHARE
 -> Collection UPDATE, roles reloaded), then this Collection's
@@ -30,6 +32,7 @@ import hashlib
 import io
 import json
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence, cast
@@ -348,8 +351,23 @@ async def _prisma(db: AsyncSession, collection_id: UUID) -> tuple[str, Any]:
     """(state, package or None); ``read_inputs`` because the writer already
     holds the Collection lock (``load_inputs`` would refuse)."""
     try:
+        inputs = await read_inputs(db, collection_id)
+        # Packaging and its automatic venue check advance these journals.
+        # Statements are bound separately, and venue obligations re-read.
+        # Bookkeeping must not invalidate the PRISMA snapshot it just froze.
+        ignored_streams = {
+            f"{AGGREGATE_TYPE}:{collection_id}",
+            f"{statements_service.AGGREGATE_TYPE}:{collection_id}",
+        }
+        heads = {
+            key: value
+            for key, value in inputs.versions["stream_heads"].items()
+            if key not in ignored_streams
+        }
         package = prisma.package(
-            prisma.derive_prisma_flow(await read_inputs(db, collection_id))
+            prisma.derive_prisma_flow(
+                replace(inputs, versions={**inputs.versions, "stream_heads": heads})
+            )
         )
     except prisma.PrismaInconsistency:
         return "inconsistent", None

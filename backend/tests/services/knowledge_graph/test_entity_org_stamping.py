@@ -11,9 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.models.graph import CreateEntityRequest, EntityType
-from src.services.knowledge_graph.knowledge_graph_service import (
-    KnowledgeGraphService,
-)
+from src.services.knowledge_graph.knowledge_graph_service import KnowledgeGraphService
 
 
 class _Result:
@@ -54,7 +52,7 @@ def test_create_entity_node_adapter_threads_org() -> None:
     svc = KnowledgeGraphService()
     captured: Dict[str, Any] = {}
 
-    def _fake_create_entity(request: CreateEntityRequest) -> Any:
+    def _fake_create_entity(request: CreateEntityRequest, **kwargs: Any) -> Any:
         captured["request"] = request
         return MagicMock(id="e2")
 

@@ -38,6 +38,8 @@ from src.schemas.chat import (
     ChatMessageUpdate,
 )
 from src.services.threads import message_service, workspace_access
+from src.services.threads.branch_reads import MessagePageMetadata
+from src.services.threads.message_branches import BranchAccessError
 
 from .dependencies import _get_thread_or_404
 from .presenters import _message_to_response
@@ -152,21 +154,31 @@ async def list_messages(
     thread_id: UUID,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
+    selected_message_id: Optional[UUID] = Query(
+        None,
+        description="Pin continuation pages to the selected branch head; stale pins return 409.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatMessageListResponse:
     """List messages in a thread"""
     offset = (page - 1) * limit
-    result = await message_service.list_messages(
-        db,
-        thread_id,
-        current_user.id,
-        workspace_id=workspace_id,
-        conversation_id=conversation_id,
-        limit=limit,
-        offset=offset,
-        order="asc",
-    )
+    metadata = MessagePageMetadata()
+    try:
+        result = await message_service.list_messages(
+            db,
+            thread_id,
+            current_user.id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            limit=limit,
+            offset=offset,
+            order="asc",
+            selected_message_id=selected_message_id,
+            branch_metadata=metadata,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Thread not found")
     messages, total, has_more = result
@@ -183,6 +195,7 @@ async def list_messages(
         page=page,
         limit=limit,
         has_more=has_more,
+        **metadata.response_fields(),
     )
 
 
@@ -253,6 +266,10 @@ async def list_messages_standalone(
             "message id. Ignored when order=asc."
         ),
     ),
+    selected_message_id: Optional[UUID] = Query(
+        None,
+        description="Pin continuation pages to the selected branch head; stale pins return 409.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatMessageListResponse:
@@ -271,15 +288,21 @@ async def list_messages_standalone(
     else:
         raise HTTPException(status_code=400, detail=f"Invalid order: {order}")
     offset = (page - 1) * limit
-    result = await message_service.list_messages(
-        db,
-        thread_id,
-        current_user.id,
-        limit=limit,
-        offset=offset,
-        before_id=before_id,
-        order=validated_order,
-    )
+    metadata = MessagePageMetadata()
+    try:
+        result = await message_service.list_messages(
+            db,
+            thread_id,
+            current_user.id,
+            limit=limit,
+            offset=offset,
+            before_id=before_id,
+            order=validated_order,
+            selected_message_id=selected_message_id,
+            branch_metadata=metadata,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Thread not found")
     messages, total, has_more = result
@@ -296,6 +319,7 @@ async def list_messages_standalone(
         page=page,
         limit=limit,
         has_more=has_more,
+        **metadata.response_fields(),
     )
 
 
@@ -369,7 +393,7 @@ async def get_message_standalone(
     current_user: User = Depends(get_current_user),
 ) -> ChatMessageResponse:
     """Get message details (standalone route)"""
-    message = await workspace_access.get_message(db, message_id, current_user.id)
+    message = await message_service.get_message(db, message_id, current_user.id)
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
 

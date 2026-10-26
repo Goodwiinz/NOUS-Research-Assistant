@@ -1,5 +1,7 @@
 # ADR: Qdrant dense leg + /vectors API — remove, don't rebuild
 
+> **Amendment 2026-10-17:** the ADR text below is preserved as written. In the current tree the Qdrant dense leg is gone (`services/search/hybrid_search_service.py` documents the retired vector arm, and `services/search/` has no `vector_service.py`), there is no `api/search/vectors.py` router, and `DO_KB_ENABLED` defaults to `False`. Live retrieval is PostgreSQL full-text search. Whether this ADR was formally accepted is not recorded here.
+
 Status: **Proposed** (2026-06-09) · Blocks the remaining Qdrant→DO KB teardown
 (see `QDRANT_REMOVAL_STATUS.md`).
 

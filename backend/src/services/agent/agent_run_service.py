@@ -673,6 +673,7 @@ async def get_run(
     *,
     organization_id: Any,
     user_id: Any,
+    for_update: bool = False,
 ) -> Optional[AgentRun]:
     """Tenant-scoped fetch — the ONLY read for user-facing paths.
 
@@ -685,6 +686,8 @@ async def get_run(
         AgentRun.organization_id == _coerce_uuid(organization_id),
         AgentRun.user_id == _coerce_uuid(user_id),
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
@@ -751,12 +754,17 @@ async def get_latest_run_for_thread(
     *,
     organization_id: Any,
     user_id: Any,
+    by_creation: bool = False,
 ) -> Optional[AgentRun]:
     """Return the newest caller-owned run for a durable thread.
 
     Resume uses this only to distinguish a stale checkpoint from a legacy
     thread with no durable run. A terminal run means the checkpoint's old HITL
     interrupt must not be re-delivered after completion or cancellation.
+
+    Live consumers select immutable creation order: a late lease release on
+    an older terminal run can update its timestamp after a new turn starts.
+    Existing checkpoint consumers retain their previous ordering.
     """
     thread_uuid = _coerce_uuid(thread_id)
     if thread_uuid is None:
@@ -768,7 +776,10 @@ async def get_latest_run_for_thread(
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
         )
-        .order_by(AgentRun.updated_at.desc())
+        .order_by(
+            (AgentRun.created_at if by_creation else AgentRun.updated_at).desc(),
+            AgentRun.job_id.desc(),
+        )
         .limit(1)
     )
     return (await db.execute(stmt)).scalar_one_or_none()

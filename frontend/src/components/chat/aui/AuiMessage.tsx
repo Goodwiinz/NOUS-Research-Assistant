@@ -1,6 +1,7 @@
 'use client';
 
 import { GeneratedArtifactCards } from '@/components/chat/aui/GeneratedArtifactCards';
+import { MessageBranchControls } from './MessageBranchControls';
 import React, {
   createContext,
   useContext,
@@ -33,6 +34,7 @@ import {
 
 import { ToolFallback } from '@/components/assistant-ui/tool-fallback';
 import { CitationRenderer } from '@/components/chat/CitationRenderer';
+import { PageFilterDetails } from '@/components/chat/PageFilterDetails';
 import { MessageTiming } from '@/components/elements/message-timing';
 import { ReasoningPanel } from '@/components/elements/reasoning-panel';
 import { RetrievalChunks } from '@/components/elements/retrieval-chunks';
@@ -53,7 +55,10 @@ import type {
   ActivityStep,
   ChatPageMessage,
 } from '@/components/chat/shared/cloudMessageView';
-import { BOUND_TO_ANOTHER_CHAT_MESSAGE } from '@/hooks/chat/useHarnessConnection';
+import {
+  BOUND_TO_ANOTHER_CHAT_MESSAGE,
+  NOT_CONNECTED_TO_PROJECT_MESSAGE,
+} from '@/hooks/chat/useHarnessConnection';
 import { completeStreamingMarkdown } from '@/lib/markdown-utils';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat-store';
@@ -441,6 +446,9 @@ export function AuiUserMessage({
               </div>
               <MessageError />
             </div>
+            {/* The action bar mounts on hover; keep persistent alternatives
+                ahead of it so revealing Edit cannot move their click target. */}
+            <MessageBranchControls message={message} />
             <MessageActions
               onEdit={canEdit ? startEdit : undefined}
               editButtonRef={editButtonRef}
@@ -583,6 +591,7 @@ function AuiStreamingBody(): ReactElement {
   const streamingPhase = useChatStore((s) => s.streamingPhase);
   const statusDetail = useChatStore((s) => s.streamingStatusDetail);
   const streamingCitations = useChatStore((s) => s.streamingCitations);
+  const pageFilter = useChatStore((s) => s.streamingPageFilter);
   const normalizedStreamingCitations = useMemo(
     () => streamingCitations.map(normalizeCitation),
     [streamingCitations]
@@ -598,7 +607,9 @@ function AuiStreamingBody(): ReactElement {
           {
             id: `${sourceId}-${index + 1}`,
             source: citation.title,
-            locator: `passage ${index + 1}`,
+            locator: citation.pageNumber
+              ? `p. ${citation.pageNumber}`
+              : `passage ${index + 1}`,
             score,
             text: citation.content ?? '',
           },
@@ -626,6 +637,7 @@ function AuiStreamingBody(): ReactElement {
     <>
       <InlineAgentSummary threadId={threadId} />
       <StreamingReasoningSection label={thinkingLabel} />
+      {pageFilter && <PageFilterDetails filter={pageFilter} />}
       {(isRetrievingRag || retrievalChunks.length > 0) && (
         <RetrievalChunks
           query="Relevant project sources"
@@ -678,6 +690,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   internal: 'The response could not be completed. Please retry.',
   cancelled: 'The response was stopped.',
   device_bound_to_another_chat: BOUND_TO_ANOTHER_CHAT_MESSAGE,
+  device_not_connected_to_project: NOT_CONNECTED_TO_PROJECT_MESSAGE,
 };
 const DEFAULT_ERROR_HELP =
   'The response could not be completed. Please try again.';
@@ -692,6 +705,9 @@ const DEFAULT_ERROR_HELP =
  * picks a computer that can run in this chat. A computer connected to this
  * chat since (`nous-harness connect --chat` registers a new device) appears
  * in the picker after its list refreshes, which opening the picker does.
+ *
+ * `device_not_connected_to_project` stays retryable for the same reason:
+ * Retry uses whichever computer and folder are selected when it is pressed.
  */
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',

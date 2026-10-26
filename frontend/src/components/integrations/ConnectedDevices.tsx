@@ -2,33 +2,110 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState, type ReactElement } from 'react';
+import { useId, useState, type ReactElement } from 'react';
 
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { useAuth } from '@/hooks/useAuth';
 import { scopeSummary } from '@/lib/integrations/scopeLabels';
+import { harnessService } from '@/services/harnessService';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import type { ApiConnectionConsent } from '@/types/api/integration-connections-contract';
 
-// A consent reaches one project, or every project of one workspace (Plan 07).
+// A consent reaches one project, every project of one workspace (Plan 07),
+// or every project in the account (account connections).
 const consentTarget = (consent: ApiConnectionConsent): string =>
-  consent.kind === 'workspace'
-    ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
-    : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
+  consent.kind === 'account'
+    ? 'Whole account'
+    : consent.kind === 'workspace'
+      ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
+      : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
 
 // Names a consent apart from its siblings in control labels: two consents of
 // one device for the same project differ only by the chat they are bound to.
 // Truthiness, not `!== null`: a backend older than this page omits thread_id.
+// An account consent is never chat-bound.
 const consentName = (consent: ApiConnectionConsent): string => {
   const target =
-    consent.kind === 'workspace'
-      ? `workspace ${consent.workspace_label ?? ''}`
-      : (consent.project_label ?? '');
+    consent.kind === 'account'
+      ? 'your whole account'
+      : consent.kind === 'workspace'
+        ? `workspace ${consent.workspace_label ?? ''}`
+        : (consent.project_label ?? '');
   if (!consent.thread_id) return target;
   return consent.thread_label
     ? `${target}, only from chat ${consent.thread_label}`
     : `${target}, only from a chat that is no longer available`;
 };
+
+/**
+ * Whether the computer can run Codex under the account: exactly one live
+ * account approval that holds harness:execute (consumed, as the server counts
+ * them for `account_wide` on the composer's computer list). With none, or with
+ * two, the server refuses every account run and lists no account folders.
+ */
+const runsUnderAccount = (consents: ApiConnectionConsent[]): boolean =>
+  consents.filter(
+    (consent) =>
+      consent.kind === 'account' &&
+      consent.status === 'consumed' &&
+      consent.scopes.includes('harness:execute')
+  ).length === 1;
+
+/**
+ * Folders on this computer that belong to no project (account folders): any
+ * chat in the account can run Codex in them. Read through the same query key
+ * as the chat composer's folder list, so the folder list has one cache.
+ */
+function AccountFolders({
+  deviceId,
+  deviceLabel,
+  userId,
+}: {
+  deviceId: string;
+  deviceLabel: string;
+  userId: string | undefined;
+}): ReactElement {
+  const headingId = useId();
+  const folders = useQuery({
+    queryKey: ['harness', 'workspaces', userId, deviceId],
+    enabled: Boolean(userId),
+    queryFn: () => harnessService.listFolders(deviceId),
+    retry: false,
+    staleTime: 0,
+  });
+  const accountFolders =
+    folders.data?.filter((folder) => folder.project_id === null) ?? [];
+  return (
+    <div className="space-y-1">
+      <h3 id={headingId} className="text-sm font-semibold">
+        Account folders
+        <span className="sr-only">{` on ${deviceLabel} (${deviceId})`}</span>
+      </h3>
+      {folders.isPending && (
+        <p role="status" className="text-sm">
+          Loading folders…
+        </p>
+      )}
+      {folders.isError && (
+        <p role="alert" className="text-sm">
+          Account folders could not be loaded.
+        </p>
+      )}
+      {folders.isSuccess && accountFolders.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No account folders on this computer yet.
+        </p>
+      )}
+      {accountFolders.length > 0 && (
+        <ul aria-labelledby={headingId} className="list-disc pl-5 text-sm">
+          {accountFolders.map((folder) => (
+            <li key={folder.workspace_id}>{folder.label}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /**
  * Connected coding devices and what each may do. Revoking takes effect on
@@ -46,8 +123,15 @@ export function ConnectedDevices(): ReactElement {
     retry: false,
     staleTime: 0,
   });
-  const refresh = (): Promise<void> =>
-    queryClient.invalidateQueries({ queryKey });
+  // The chat composer offers the computers and folders read from the same
+  // access, under ['harness', ...] with a 30 s staleTime: refresh them with
+  // the list so a revoked computer is not offered for the rest of that time.
+  const refresh = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey }),
+      queryClient.invalidateQueries({ queryKey: ['harness'] }),
+    ]);
+  };
   const revokeConsent = useMutation({
     mutationFn: (requestId: string) =>
       integrationConnectionsService.revokeConsent(requestId),
@@ -158,7 +242,9 @@ export function ConnectedDevices(): ReactElement {
                         </p>
                       )}
                       <p className="text-sm text-muted-foreground">
-                        {consent.scopes.map(scopeSummary).join(', ')}
+                        {consent.scopes
+                          .map((scope) => scopeSummary(scope, consent.kind))
+                          .join(', ')}
                       </p>
                       {consent.scopes.includes('context:read') && (
                         <p className="text-sm">
@@ -184,6 +270,13 @@ export function ConnectedDevices(): ReactElement {
                   </li>
                 ))}
               </ul>
+            )}
+            {runsUnderAccount(device.consents) && (
+              <AccountFolders
+                deviceId={device.device_id}
+                deviceLabel={device.device_label}
+                userId={user?.id}
+              />
             )}
           </li>
         ))}

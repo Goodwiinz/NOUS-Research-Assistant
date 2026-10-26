@@ -1,253 +1,37 @@
-# Kubernetes Deployment Configuration
-
-This directory contains Kubernetes manifests and Helm charts for the Multimodal Enterprise RAG System deployment.
-
-## Directory Structure
-
-```
-k8s/
-├── base/                    # Base Kubernetes manifests
-│   ├── backend/            # Backend service configuration
-│   ├── frontend/           # Frontend service configuration
-│   ├── database/           # Database configurations
-│   └── monitoring/         # Monitoring stack
-├── overlays/               # Environment-specific overlays
-│   ├── development/        # Development environment
-│   ├── staging/            # Staging environment
-│   └── production/         # Production environment
-├── charts/                 # Helm charts
-│   ├── rag-backend/
-│   ├── rag-frontend/
-│   ├── rag-database/
-│   └── rag-monitoring/
-└── scripts/                # Deployment scripts
-```
-
-## Quick Start
-
-### Prerequisites
-
-- Kubernetes cluster (v1.23+)
-- Helm v3
-- kubectl
-- Cert-Manager for TLS
-- Prometheus Operator
-
-### Installation
-
-1. Install cert-manager:
-```bash
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.yaml
-```
-
-2. Install Prometheus Operator:
-```bash
-kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.67.0/bundle.yaml
-```
-
-3. Install the stack:
-```bash
-# Install monitoring stack
-helm upgrade --install monitoring ./charts/rag-monitoring/
-
-# Install database
-helm upgrade --install database ./charts/rag-database/
-
-# Install backend
-helm upgrade --install backend ./charts/rag-backend/
-
-# Install frontend
-helm upgrade --install frontend ./charts/rag-frontend/
-```
-
-### Environment-Specific Deployment
-
-```bash
-# Development
-helm upgrade --install dev-frontend ./charts/rag-frontend/ --values ./overlays/development/frontend-values.yaml
-helm upgrade --install dev-backend ./charts/rag-backend/ --values ./overlays/development/backend-values.yaml
-
-# Staging
-helm upgrade --install staging-frontend ./charts/rag-frontend/ --values ./overlays/staging/frontend-values.yaml
-helm upgrade --install staging-backend ./charts/rag-backend/ --values ./overlays/staging/backend-values.yaml
-
-# Production
-helm upgrade --install prod-frontend ./charts/rag-frontend/ --values ./overlays/production/frontend-values.yaml
-helm upgrade --install prod-backend ./charts/rag-backend/ --values ./overlays/production/backend-values.yaml
-```
-
-## Configuration
-
-### Customization
-
-Edit the values.yaml files in each chart directory to customize the deployment:
-
-- `resources`: CPU/memory limits and requests
-- `replicaCount`: Number of replicas
-- `image`: Container image and tag
-- `service`: Service type and ports
-- `ingress`: Ingress configuration
-- `secrets`: Secret management
-
-### Networking
-
-All services are deployed in the `rag-system` namespace with internal networking configured:
-
-- Frontend: ClusterIP service, Ingress for external access
-- Backend: ClusterIP service with load balancing
-- Database: Headless service for internal communication
-- Monitoring: ClusterIP services with port-forwarding for access
-
-### Storage
-
-Persistent volumes are configured for:
-
-- PostgreSQL data
-- Redis data
-- Neo4j data
-- Application logs
-- Model files
-
-## Monitoring
-
-The monitoring stack includes:
-
-- Prometheus for metrics collection
-- Grafana for visualization
-- AlertManager for alerting
-- Node Exporter for node metrics
-- Kubernetes Service Monitor for service discovery
-
-Access Grafana:
-```bash
-kubectl port-forward svc/rag-grafana 3001:80
-```
-
-Access Prometheus:
-```bash
-kubectl port-forward svc/rag-prometheus 9090:9090
-```
-
-## Security
-
-### Network Policies
-
-Network policies are implemented to:
-- Restrict access between services
-- Allow only necessary ports
-- Implement ingress/egress rules
-
-### RBAC
-
-Service accounts and roles are configured for:
-- Prometheus service
-- Grafana service
-- Application services
-
-### TLS/SSL
-
-TLS certificates are managed via cert-manager for:
-- Ingress encryption
-- Service-to-service communication
-
-## Scaling
-
-### Horizontal Pod Autoscaling
-
-HPA is configured for:
-- Frontend: CPU and memory based scaling
-- Backend: Request-based scaling
-- Workers: Queue-based scaling
-
-### Vertical Scaling
-
-Resource limits can be adjusted in values.yaml for:
-- CPU limits and requests
-- Memory limits and requests
-- Persistent volume sizes
-
-## Backup and Recovery
-
-### Database Backups
-
-PostgreSQL backups are configured with:
-- Daily automated backups
-- Point-in-time recovery
-- Encryption at rest
-
-### Application Data
-
-Application data is backed up via:
-- Persistent volume snapshots
-- ConfigMap exports
-- Secret exports
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Pods not starting**: Check events and logs
-```bash
-kubectl describe pod <pod-name>
-kubectl logs <pod-name>
-```
-
-2. **Service not accessible**: Check service configuration and network policies
-```bash
-kubectl get services
-kubectl get endpoints
-kubectl describe networkpolicy <policy-name>
-```
-
-3. **Performance issues**: Check resource limits and HPA
-```bash
-kubectl top pods
-kubectl get hpa
-```
-
-### Debug Mode
-
-Enable debug mode for troubleshooting:
-```bash
-kubectl set env deployment/backend DEBUG=true
-kubectl set env deployment/frontend DEBUG=true
-```
-
-## Cleanup
-
-To uninstall the complete stack:
-```bash
-helm uninstall frontend backend database monitoring
-kubectl delete namespace rag-system
-```
-
-## Maintenance
-
-### Updates
-
-Update deployments using Helm:
-```bash
-helm dependency update ./charts/rag-backend/
-helm upgrade --install backend ./charts/rag-backend/
-```
-
-### Rolling Updates
-
-Update deployments with rolling updates:
-```bash
-kubectl set image deployment/backend backend=my-new-image:tag
-```
-
-### Health Checks
-
-Health checks are configured for all services:
-- Liveness probes
-- Readiness probes
-- Startup probes
-
-## Support
-
-For issues and questions:
-- Check the troubleshooting section
-- Review the logs and metrics
-- Contact the DevOps team
+# infrastructure/kubernetes
+
+> **Mostly legacy.** Only two paths here are consumed by the live AWS Argo CD
+> setup (checked 2026-10-17). Everything else is unconsumed reference material.
+> The earlier README of this directory described a `k8s/{base,overlays,charts,scripts}`
+> layout with `rag-backend`/`rag-frontend` charts that does not exist; it was
+> replaced.
+
+The live application is the Helm chart
+[`../helm/knowledge-graph-analytics`](../helm/knowledge-graph-analytics/README.md),
+deployed by Argo CD application `nous-dev-aws` into namespace
+`multimodal-rag-system` on EKS `nous-dev-cluster`
+(see [`../argocd/applications/aws-dev.yaml`](../argocd/applications/aws-dev.yaml)
+and the [AWS overview](../../docs/deployment/aws-overview.md)).
+
+## Layout
+
+| Path | Status |
+| --- | --- |
+| `overlays/aws-dev/` | **Live.** Kustomize overlay consumed by Argo CD app `nous-dev-aws-ingress` (adds the websocket Ingress for the ALB controller). The Helm chart owns the API hostname. |
+| `aws-bootstrap/` | **Live, applied outside Argo CD.** Holds the cluster-scoped gp3 `StorageClass`, which the `nous-platform` AppProject does not whitelist. |
+| `aws-addons.md` | Record of the out-of-band addon installs on the EKS cluster (ALB controller, autoscaler, and others). |
+| `infisical-bootstrap.md`, `secrets/` | Secret bootstrap and policy. See [infisical-bootstrap.md](infisical-bootstrap.md) and [secrets/README.md](secrets/README.md). |
+| `cloudflared-argocd.yaml` | Cloudflare tunnel Deployment for the Argo CD dashboard (namespace `argocd`). No Argo CD application references it; how it is applied is not verified. |
+| `overlays/production/` | Legacy blue-green manifests, no kustomization, no consumer. |
+| `base/`, `manifests/`, `helm/rag-system/`, `services/`, `configmaps/`, `jobs/`, `monitoring/`, `namespace.yaml`, `secrets.yaml` | **Legacy, unconsumed.** No Argo CD application or workflow references them. They carry dead references (for example Qdrant, which is removed) and pre-AWS namespaces. Do not apply them to a cluster and do not copy them into the live chart. |
+
+The legacy chart in `helm/rag-system/` is separate from
+`../../deployment/helm/rag-system/`; neither is deployed.
+
+## Rules
+
+- Trace the Argo CD application or workflow consumer before editing any file
+  here; see [../AGENTS.md](../AGENTS.md).
+- Never commit secret values or kubeconfig material.
+- Applying, syncing or deleting anything in a cluster needs explicit
+  authorization for the exact target.

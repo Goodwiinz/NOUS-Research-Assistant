@@ -1,5 +1,7 @@
 # CI/CD Setup - TODO
 
+> **Status: historical (reconciled 2026-10-17).** This TODO list predates the current CI; the live description is [.github/workflows/README.md](../../.github/workflows/README.md) and [.github/SECRETS_SETUP.md](../../.github/SECRETS_SETUP.md). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Qdrant is removed; live retrieval is PostgreSQL full-text. Start with the [AWS deployment overview](aws-overview.md) and [AWS on-call commands](../operations/aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 ## ✅ Done Today (Jan 31)
 - [x] Removed depot.dev from CI workflows
 - [x] Updated `test-pipeline.yml` (uses docker/build-push-action)

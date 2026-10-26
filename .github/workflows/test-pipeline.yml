@@ -49,10 +49,10 @@ jobs:
       integration: ${{ steps.select.outputs.integration }}
       e2e: ${{ steps.select.outputs.e2e }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Select checks from the complete PR diff
@@ -75,12 +75,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci-plan
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: the feature-map shrink-only check reads the map at
           # merge-base(base, HEAD), which a shallow clone cannot resolve.
           fetch-depth: 0
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install lightweight test dependencies
@@ -125,7 +125,7 @@ jobs:
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: the changed-file ratchet diffs against the PR base
           # (or push `before`) via merge-base, which a shallow clone breaks.
@@ -143,7 +143,7 @@ jobs:
             fi
           fi
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       # Install the CURRENT pins directly instead of building Dockerfile.lint:
@@ -227,15 +227,15 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: the quality ratchet diffs against the PR base
           # (or push `before`) via merge-base, which a shallow clone breaks.
           fetch-depth: 0
       - name: Set up pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -305,8 +305,9 @@ jobs:
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
-    # are disposable (postgres/postgres) — no secrets, by design. Preserve the
-    # verified official image digest on Docker Hub after ECR quota failures.
+    # are disposable (postgres/postgres) — no secrets, by design. These official
+    # image digests match passing CI pulls; ECR exhausted its anonymous data quota.
+    # Refresh pins using docs/testing/evidence/r8-release-chain-20261016/README.md.
     services:
       postgres:
         image: docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
@@ -319,9 +320,9 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install Alembic (pinned to backend requirement)
@@ -334,7 +335,7 @@ jobs:
         run: python ../scripts/ci/check_alembic.py
       # --- Targeted blocking probe plus advisory legacy-chain measurements ---
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -434,9 +435,9 @@ jobs:
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -449,7 +450,7 @@ jobs:
           docker system prune -af || true
           df -h
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -496,7 +497,7 @@ jobs:
             --confcutdir=tests/unit/scripts \
             -q --no-cov
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.xml
           flags: unit
@@ -519,9 +520,9 @@ jobs:
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -532,7 +533,7 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -582,13 +583,13 @@ jobs:
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the advisory oasdiff step can resolve the PR base's
           # committed spec via `git show <base-sha>:backend/openapi.json`.
           fetch-depth: 0
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -599,7 +600,7 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           # Same key as unit-tests: importing the app needs the full backend
@@ -632,9 +633,9 @@ jobs:
       # Without this, backend/openapi.json could be regenerated while the
       # frontend types silently lag a contract change behind.
       - name: Set up pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -739,9 +740,9 @@ jobs:
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install security tools
@@ -768,11 +769,11 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -808,7 +809,7 @@ jobs:
         run: node ../scripts/ci/check_frontend_coverage.mjs coverage/coverage-summary.json
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: frontend/coverage/lcov.info
           flags: frontend
@@ -845,6 +846,7 @@ jobs:
         shard: [1, 2, 3]
     services:
       postgres:
+        # Same PostgreSQL 15 digest verified in the passing shards; avoid ECR's data quota.
         image: docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
@@ -861,9 +863,9 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -876,7 +878,7 @@ jobs:
           docker system prune -af || true
           df -h
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -959,11 +961,17 @@ jobs:
         if: matrix.shard == 1
         # These integration-marked tests live outside the sharded directory.
         # Give them a real database once, and reject a green all-skipped run.
+        # The PDF-chat branch suites (GOO-436) ride this lane: they own
+        # generated schemas and cover the pb01 migration round trip and the
+        # accept/select/read serialization only PostgreSQL can prove.
         run: |
           mkdir -p test-results
           pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
             backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
             backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            backend/tests/unit/services/test_message_branches_postgres.py \
+            backend/tests/unit/services/test_alphaxiv_live_postgres.py \
+            backend/tests/unit/services/test_native_pdf_branch_reads_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/ingestion-recovery.xml -q -ra
           python - <<'PY'
@@ -988,7 +996,7 @@ jobs:
           AZURE_OPENAI_CHAT_API_KEY: "test-key-not-real"
       - name: Save ingestion recovery test results
         if: always() && matrix.shard == 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ingestion-recovery-results
           path: test-results/ingestion-recovery.xml
@@ -1004,10 +1012,13 @@ jobs:
         # scratch databases with the real alembic chain (CREATE DATABASE needs
         # the service's superuser) and guards the thread/message full-text
         # objects and /api/v2/search/health on a migration-built schema.
+        # GOO-423 also replays handoff-key migration/rollback on a disposable
+        # database; it needs PostgreSQL but deliberately does not need pgvector.
         run: |
           mkdir -p test-results
           pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
             backend/tests/integration/test_search_vector_repair_postgres.py \
+            backend/tests/integration/test_handoff_org_slots_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/two-account-pg-search.xml -q -ra
           python - <<'PY'
@@ -1033,13 +1044,13 @@ jobs:
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
       - name: Save two-account PostgreSQL search results
         if: ${{ !cancelled() && matrix.shard == 1 }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: two-account-pg-search-results
           path: test-results/two-account-pg-search.xml
           retention-days: 7
       - name: Upload coverage
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.xml
           flags: integration
@@ -1061,9 +1072,9 @@ jobs:
     needs: [ci-plan, unit-tests]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -1076,7 +1087,7 @@ jobs:
           docker system prune -af || true
           df -h
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -1111,7 +1122,7 @@ jobs:
           ENVIRONMENT: testing
           DATABASE_URL: "sqlite:///:memory:"
       - name: Upload coverage
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.xml
           flags: resilience
@@ -1140,7 +1151,7 @@ jobs:
     # leave enough time for infrastructure startup and the actual Playwright run.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free runner disk space
         run: |
           df -h
@@ -1160,7 +1171,7 @@ jobs:
           docker system prune -af --volumes || true
           df -h
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # build-push-action with load:true puts the image in the local daemon so
       # the docker-compose run below can use it. type=gha persists BuildKit
       # layers across runs (content-addressed → lockfile changes invalidate the
@@ -1208,7 +1219,7 @@ jobs:
               env.write(f"SERVICE_ROLE_JWT={service_role}\n")
           PY
       - name: Build backend image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: backend/docker/Dockerfile.prod
@@ -1220,7 +1231,7 @@ jobs:
           cache-from: type=gha,scope=backend-e2e
           cache-to: type=gha,scope=backend-e2e,mode=max
       - name: Build frontend image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: frontend/Dockerfile.prod
@@ -1412,16 +1423,16 @@ jobs:
               db.commit()
           "
       - name: Set up pnpm for Playwright
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - name: Setup Node.js for Playwright
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/ms-playwright
           # Key on pnpm-lock.yaml so browser cache invalidates when the locked
@@ -1468,7 +1479,7 @@ jobs:
             pnpm --dir tests/e2e exec playwright test --project=chromium --reporter=html,github --max-failures=15
           fi
       - name: Upload E2E test results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: e2e-test-results
@@ -1524,9 +1535,9 @@ jobs:
         ports:
           - 5432/tcp
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
@@ -1539,7 +1550,7 @@ jobs:
           docker system prune -af || true
           df -h
       - name: Cache pip dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements*.txt', 'backend/constraints-ci.txt') }}
@@ -1562,7 +1573,7 @@ jobs:
           ENVIRONMENT: testing
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
       - name: Store benchmark results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: benchmark-results
           path: benchmark.json
@@ -1588,7 +1599,7 @@ jobs:
       - e2e-tests
     if: always()
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require successful selected checks and validate every skip
         env:
           REQUIRED_JOB_RESULTS: ${{ toJSON(needs) }}

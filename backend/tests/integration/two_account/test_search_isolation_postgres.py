@@ -177,11 +177,13 @@ def graph_calls(
         limit: int = 50,
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
+        require_source_document: bool = False,
     ) -> list:
         calls.append(
             {
                 "organization_id": organization_id,
                 "source_document_ids": source_document_ids,
+                "require_source_document": require_source_document,
             }
         )
         return list(graph_entities)

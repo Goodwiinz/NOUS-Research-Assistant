@@ -1,5 +1,7 @@
 # Automatic Knowledge Graph Integration for Document Uploads
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document describes the automatic knowledge graph extraction feature that has been integrated into the document upload pipeline. When you upload a document via the frontend, the system will automatically extract entities and store them in the Neo4j knowledge graph.

@@ -44,7 +44,16 @@ from types import MappingProxyType
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, CursorResult, func, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    CursorResult,
+    and_,
+    exists,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,13 +65,20 @@ from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.models.workspace import Workspace
 from src.schemas.chat import CollectionCreate, CollectionUpdate
-from src.schemas.integration_context import IntegrationContext
+from src.schemas.integration_context import (
+    BindingKind,
+    IntegrationContext,
+    binding_matches_kind,
+    derive_binding_kind,
+)
 from src.schemas.integration_tools import ToolInvocation, ToolResult
 from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
 from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 from src.services.documents import file_metadata_service
 from src.services.integrations.context import (
     IntegrationAccessDenied,
+    account_scope_condition,
+    authorized_account_workspace,
     authorized_scope_filter,
     live,
 )
@@ -194,6 +210,20 @@ def _now() -> datetime:
 def _clock() -> float:
     """Monotonic seconds, for the drain's budget."""
     return time.monotonic()
+
+
+def _actor_kind(actor: ActionActor) -> BindingKind | None:
+    """The actor's binding kind: as stated, else derived from its columns
+    (never "account", which only the router states from the grant)."""
+    if actor.binding_kind is not None:
+        return actor.binding_kind
+    return derive_binding_kind(actor.project_id, actor.workspace_id)
+
+
+def _row_kind(row: IntegrationToolAction) -> str:
+    """The kind of the grant that stored ``row``. Every writer states it (the
+    column has no default), so a stored row always carries it."""
+    return str(row.binding_kind)
 
 
 def canonical_hash(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -406,6 +436,28 @@ def _validate_arxiv_ingest(arguments: dict[str, Any]) -> dict[str, Any]:
     return validated
 
 
+def _validate_account_note(arguments: dict[str, Any]) -> dict[str, Any]:
+    """An account grant names the project its note lands in; the rest is a
+    note, identity still refused."""
+    validated = _validate_note_arguments(
+        {key: value for key, value in arguments.items() if key != "project_id"}
+    )
+    return {**validated, "project_id": _uuid(arguments.get("project_id"), "project_id")}
+
+
+def _validate_account_create_folder(arguments: dict[str, Any]) -> dict[str, Any]:
+    """An account grant names the workspace the folder is created in. Here,
+    and only here, ``workspace_id`` is a selector rather than identity; the
+    target check holds it to the account."""
+    validated = _validate_create_folder(
+        {key: value for key, value in arguments.items() if key != "workspace_id"}
+    )
+    return {
+        **validated,
+        "workspace_id": _uuid(arguments.get("workspace_id"), "workspace_id"),
+    }
+
+
 _VALIDATORS: Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]] = (
     MappingProxyType(
         {
@@ -423,15 +475,31 @@ _VALIDATORS: Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]] = (
 )
 
 
-def validate_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+_ACCOUNT_VALIDATORS: Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]] = (
+    MappingProxyType(
+        {
+            "create_project_note": _validate_account_note,
+            "create_folder": _validate_account_create_folder,
+        }
+    )
+)
+
+
+def validate_arguments(
+    tool_name: str, arguments: dict[str, Any], *, binding_kind: str = "project"
+) -> dict[str, Any]:
     """The canonical arguments of one action: what is stored and hashed.
 
     Identity is refused on every action. Selectors are parsed into canonical
-    UUID strings, never resolved here. Raises ``ToolActionArgumentError`` with
-    a fixed reason, a public 422 detail that never echoes the caller's values.
+    UUID strings, never resolved here. An account grant's note names its
+    project and its create_folder its workspace. Raises
+    ``ToolActionArgumentError`` with a fixed reason, a public 422 detail that
+    never echoes the caller's values.
     """
     if tool_name not in ALLOWED_ACTIONS:
         raise ToolActionArgumentError("tool is not available as an action")
+    if binding_kind == "account" and tool_name in _ACCOUNT_VALIDATORS:
+        return _ACCOUNT_VALIDATORS[tool_name](arguments)
     return _VALIDATORS[tool_name](arguments)
 
 
@@ -486,21 +554,33 @@ async def request_action(
     Raises ``ToolActionArgumentError`` (422), ``IntegrationAccessDenied``
     (403) or ``ActionConflict`` (409).
     """
-    arguments = validate_arguments(invocation.tool_name, invocation.arguments)
+    kind = _actor_kind(actor)
+    arguments = validate_arguments(
+        invocation.tool_name, invocation.arguments, binding_kind=kind or "project"
+    )
     if not scope_allows(invocation.tool_name, actor.scopes):
         raise IntegrationAccessDenied()
     digest = canonical_hash(invocation.tool_name, arguments)
     existing = await db.scalar(_scoped(actor, invocation.invocation_id))
     if existing is None:
         target = await _resolve_target(db, actor, invocation.tool_name, arguments)
+        if kind is None:
+            raise IntegrationAccessDenied()  # _resolve_target already refused it
+        target_workspace = (
+            UUID(arguments["workspace_id"])
+            if kind == "account" and invocation.tool_name == "create_folder"
+            else None
+        )
         auto_run = runs_without_approval(invocation.tool_name, actor.scopes)
         row = IntegrationToolAction(
             organization_id=actor.organization_id,
             user_id=actor.user_id,
-            # The Collection the action aims at (None: the workspace itself),
+            # The Collection the action aims at (None: a workspace itself),
             # and the binding of the grant that asked for it.
             project_id=target,
             workspace_id=actor.workspace_id,
+            binding_kind=kind,
+            target_workspace_id=target_workspace,
             thread_id=actor.thread_id,
             run_id=str(actor.run_id) if actor.run_id else None,
             grant_id=actor.grant_id,
@@ -557,21 +637,33 @@ async def _resolve_target(
     other is refused, and it cannot create a folder beside it. A workspace
     grant's selectors must name live Collections of its workspace that the
     user can still reach; ``create_folder`` aims at the workspace itself
-    (None), ``update_document_metadata`` at a folder of that scope holding the
-    document (the first by name when several do), and ``ingest_arxiv_papers``
-    must name its folder. Out of scope raises ``IntegrationAccessDenied``,
-    opaque, so a foreign Collection reads like a missing one.
+    (None). An account grant's selectors must name Collections the account
+    rule covers; its ``create_folder`` aims at the workspace it names, which
+    must be in the account (None is returned; request_action stores it as
+    target_workspace_id). ``update_document_metadata`` aims at a folder of the
+    scope holding the document (the first by name when several do), and
+    ``ingest_arxiv_papers`` must name its folder unless the grant is a
+    project's. Out of scope raises ``IntegrationAccessDenied``, opaque, so a
+    foreign Collection reads like a missing one.
     """
-    if (actor.project_id is None) == (actor.workspace_id is None):
-        raise IntegrationAccessDenied()  # a grant binds exactly one of them
+    kind = _actor_kind(actor)
+    if kind is None or not binding_matches_kind(
+        kind, actor.project_id, actor.workspace_id
+    ):
+        raise IntegrationAccessDenied()  # one binding, of the kind it states
     selected = {UUID(arguments[key]) for key in SELECTOR_KEYS if key in arguments}
     target: UUID | None = None
-    if actor.project_id is not None:
+    if kind == "project":
         if tool_name == "create_folder" or selected - {actor.project_id}:
             raise IntegrationAccessDenied()
         target = actor.project_id
-    elif tool_name == "create_project_note":
-        # A note lands in the grant's own project and takes no selector.
+    elif kind == "account" and tool_name == "create_folder":
+        await authorized_account_workspace(
+            db, actor.user_id, actor.organization_id, UUID(arguments["workspace_id"])
+        )
+        return None
+    elif kind == "workspace" and tool_name == "create_project_note":
+        # A note lands in one project, and a workspace grant cannot name it.
         raise ToolActionArgumentError(
             "workspace connections cannot request this action"
         )
@@ -580,7 +672,7 @@ async def _resolve_target(
     elif "project_id" in arguments:
         target = UUID(arguments["project_id"])
     elif tool_name == "ingest_arxiv_papers":
-        # A workspace holds many folders: an ingest must say which one.
+        # A workspace or an account holds many folders: name one.
         raise ToolActionArgumentError("project_id is required")
     scope = await _scope_condition(db, actor)
     if tool_name == "update_document_metadata":
@@ -611,11 +703,15 @@ async def _resolve_target(
 async def _scope_condition(db: AsyncSession, actor: ActionActor) -> ColumnElement[bool]:
     """The actor's binding as a condition on ``Collection``, after the per-call
     access re-check ``authorized_scope_filter`` makes."""
+    kind = _actor_kind(actor)
+    if kind is None:
+        raise IntegrationAccessDenied()  # bound to nothing
     context = IntegrationContext(
         user_id=actor.user_id,
         organization_id=actor.organization_id,
         project_id=actor.project_id,
         workspace_id=actor.workspace_id,
+        binding_kind=kind,
         # Only identity and binding are read; a native actor has no grant.
         grant_id=actor.grant_id or uuid4(),
         scopes=actor.scopes,
@@ -653,7 +749,11 @@ async def _folders_holding(
 
 def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
     """A replay must name the stored target; the hash excludes server bindings."""
-    if row.workspace_id is not None:
+    if _row_kind(row) == "account":
+        # The consent scoping in _scoped already pins the approval; the actor
+        # must also be the account's, never a project or workspace actor.
+        same_binding = _actor_kind(actor) == "account"
+    elif row.workspace_id is not None:
         # The row names its grant's workspace, and its project_id, when set, is
         # the Collection the action aims at. A workspace grant's actor carries
         # no project, so only the workspace is compared (the hash covers the
@@ -741,13 +841,16 @@ async def get_action_for_review(
                 Workspace.is_deleted,
             )
             # A workspace-level action has no project; a project action
-            # reaches its workspace through the project.
+            # reaches its workspace through the project; an account folder
+            # names its workspace as target_workspace_id.
             .outerjoin(Collection, Collection.id == IntegrationToolAction.project_id)
             .join(
                 Workspace,
                 Workspace.id
                 == func.coalesce(
-                    IntegrationToolAction.workspace_id, Collection.workspace_id
+                    IntegrationToolAction.workspace_id,
+                    IntegrationToolAction.target_workspace_id,
+                    Collection.workspace_id,
                 ),
             )
             .where(
@@ -772,6 +875,9 @@ async def get_action_for_review(
         workspace=None if workspace_label is None else str(workspace_label),
     )
     note = row.tool_name == "create_project_note"
+    shown_workspace = (
+        row.workspace_id if row.workspace_id is not None else row.target_workspace_id
+    )
     return ActionReview(
         invocation_id=row.invocation_id,
         state=cast(Any, row.state),
@@ -780,8 +886,8 @@ async def get_action_for_review(
         arguments=arguments,
         project_id=row.project_id,
         project_label=None if row.project_id is None else str(project_label),
-        workspace_id=row.workspace_id,
-        workspace_label=None if row.workspace_id is None else str(workspace_label),
+        workspace_id=shown_workspace,
+        workspace_label=None if shown_workspace is None else str(workspace_label),
         # Kept visible so it can still be denied; approval would fail closed.
         project_available=not (project_deleted or workspace_deleted),
         title=str(arguments.get("title", "")) if note else "",
@@ -813,20 +919,27 @@ async def _selected_folder_names(
 
     Only within the row's own workspace: request_action let a workspace grant
     select its own workspace's Collections and a project grant only its
-    project, whose name the review's own join already carries. A soft-deleted
-    Collection keeps its name, as the target's label does.
+    project, whose name the review's own join already carries. An account row
+    names only Collections its user's account covers now; any other id (one
+    outside the account, soft-deleted or archived) is left unnamed, so the
+    review shows its id. For project and workspace rows a soft-deleted
+    Collection of the workspace keeps its name, as the target's label does.
     """
-    if row.workspace_id is None:
+    if _row_kind(row) == "account":
+        within: ColumnElement[bool] = account_scope_condition(
+            row.user_id, row.organization_id
+        )
+    elif row.workspace_id is None:
         return {}
+    else:
+        within = Collection.workspace_id == row.workspace_id
     arguments = row.arguments or {}
     wanted = _review_ids(arguments[key] for key in SELECTOR_KEYS if key in arguments)
     wanted -= {row.project_id}
     if not wanted:
         return {}
     found = await db.execute(
-        select(Collection.id, Collection.name).where(
-            Collection.id.in_(wanted), Collection.workspace_id == row.workspace_id
-        )
+        select(Collection.id, Collection.name).where(Collection.id.in_(wanted), within)
     )
     return {UUID(str(folder_id)): str(name) for folder_id, name in found.all()}
 
@@ -955,33 +1068,62 @@ def _summary(row: IntegrationToolAction, names: _ReviewNames) -> str:
     return f"Run the action {_quoted(tool_name)}"
 
 
-def _binding_matches(
-    project_id: UUID | None, workspace_id: UUID | None, row: IntegrationToolAction
-) -> bool:
-    """Whether a grant's (or its consent's) binding is the one the row needs.
+def _binding_matches(grant: IntegrationGrant, row: IntegrationToolAction) -> bool:
+    """Whether a grant's binding is the one the row needs.
 
-    A row with a workspace_id was authorised by a workspace grant of that
-    workspace, which carries no project: the row's own project_id, if any, is
-    the Collection it aims at, and ``_target_reason`` checks that against the
-    workspace. A row without one needs a grant on exactly its project and on no
-    workspace. Comparing the row's project_id to the grant's would refuse every
-    action a workspace grant aims at a Collection (grant NULL, row set).
+    An account row needs an account grant. A row with a workspace_id was
+    authorised by a workspace grant of that workspace, which carries no
+    project: the row's own project_id, if any, is the Collection it aims at,
+    and ``_target_reason`` checks that against the workspace. Any other row
+    needs a project grant on exactly its project. Comparing the row's
+    project_id to the grant's would refuse every action a workspace grant aims
+    at a Collection (grant NULL, row set).
     """
+    if _row_kind(row) == "account":
+        return grant.binding_kind == "account"
+    # The kind tests below repeat the binding CHECK of the grants table on
+    # purpose: an account grant (no project, no workspace) must never satisfy
+    # a project or workspace row even if the CHECK were relaxed or bypassed.
     if row.workspace_id is not None:
-        return project_id is None and workspace_id == row.workspace_id
-    return project_id == row.project_id and workspace_id is None
+        return (
+            grant.binding_kind == "workspace"
+            and grant.project_id is None
+            and grant.workspace_id == row.workspace_id
+        )
+    return (
+        grant.binding_kind == "project"
+        and grant.project_id == row.project_id
+        and grant.workspace_id is None
+    )
 
 
-def _consent_binding(row: IntegrationToolAction) -> tuple[Any, Any]:
-    """``_binding_matches`` as the conditions on a consent request's columns."""
+def _consent_binding(row: IntegrationToolAction) -> tuple[ColumnElement[bool], ...]:
+    """The consent rows that may stand behind the row's grant: an account
+    consent for an account row; a consent of the row's workspace for a
+    workspace row; for a project row a consent of exactly its project, or an
+    account consent while the project is in the account (a run's grant under
+    an account approval)."""
+    if _row_kind(row) == "account":
+        return (IntegrationGrantRequest.binding_kind == "account",)
     if row.workspace_id is not None:
         return (
             IntegrationGrantRequest.project_id.is_(None),
             IntegrationGrantRequest.workspace_id == row.workspace_id,
         )
     return (
-        IntegrationGrantRequest.project_id == row.project_id,
-        IntegrationGrantRequest.workspace_id.is_(None),
+        or_(
+            and_(
+                IntegrationGrantRequest.project_id == row.project_id,
+                IntegrationGrantRequest.workspace_id.is_(None),
+            ),
+            and_(
+                IntegrationGrantRequest.binding_kind == "account",
+                exists().where(
+                    Collection.id == row.project_id,
+                    account_scope_condition(row.user_id, row.organization_id),
+                ),
+            ),
+        ),
     )
 
 
@@ -1017,6 +1159,8 @@ async def _target_reason(
     (``create_folder``) needs the workspace itself.
     """
     targets = _targets(row)
+    if _row_kind(row) == "account":
+        return await _account_target_reason(db, row, grant, targets)
     project_bound = row.workspace_id is None
     if project_bound and row.project_id is None:
         return GRANT_DENIED  # bound to nothing: never authorisable
@@ -1049,6 +1193,48 @@ async def _target_reason(
     return None if reachable == targets else GRANT_DENIED
 
 
+async def _account_target_reason(
+    db: AsyncSession,
+    row: IntegrationToolAction,
+    grant: IntegrationGrant,
+    targets: set[UUID],
+) -> str | None:
+    """An account row may touch only what the account covers when it runs:
+    every Collection it names, or for create_folder the workspace it names.
+    A project or workspace that left the account since the request refuses
+    the effect."""
+    if row.target_workspace_id is not None:
+        if targets:
+            return GRANT_DENIED
+        try:
+            await authorized_account_workspace(
+                db, row.user_id, row.organization_id, row.target_workspace_id
+            )
+        except IntegrationAccessDenied:
+            return GRANT_DENIED
+        return None
+    if not targets:
+        return GRANT_DENIED  # names nothing: never authorisable
+    context = IntegrationContext(
+        user_id=row.user_id,
+        organization_id=row.organization_id,
+        binding_kind="account",
+        grant_id=grant.id,
+    )
+    try:
+        scope = await authorized_scope_filter(db, context)
+    except IntegrationAccessDenied:
+        return GRANT_DENIED
+    reachable = set(
+        (
+            await db.scalars(
+                select(Collection.id).where(Collection.id.in_(targets), scope)
+            )
+        ).all()
+    )
+    return None if reachable == targets else GRANT_DENIED
+
+
 async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str | None:
     """Return a stable reason when the request may no longer run."""
     if row.grant_id is None:
@@ -1063,7 +1249,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         or grant.is_deleted
         or grant.user_id != row.user_id
         or grant.organization_id != row.organization_id
-        or not _binding_matches(grant.project_id, grant.workspace_id, row)
+        or not _binding_matches(grant, row)
         # The same per-action scope request_action checked: library:write
         # never runs a note, a deletion or an ingest.
         or not scope_allows(row.tool_name, grant.scopes)
@@ -1271,13 +1457,17 @@ async def _move_papers(
 async def _create_folder(
     db: AsyncSession, row: IntegrationToolAction, user: User
 ) -> dict[str, Any]:
-    if row.workspace_id is None:
-        # Only a workspace grant may create one; its row names the workspace.
+    workspace_id = (
+        row.target_workspace_id if _row_kind(row) == "account" else row.workspace_id
+    )
+    if workspace_id is None:
+        # Only a workspace or account grant may create one; its row names the
+        # workspace.
         raise ToolActionError("action has no target workspace")
     created = await collection_service.create_collection(
         db,
         CollectionCreate(
-            workspace_id=row.workspace_id,
+            workspace_id=workspace_id,
             name=row.arguments["name"],
             description=row.arguments.get("description"),
             color=None,
@@ -1290,7 +1480,7 @@ async def _create_folder(
     return _receipt(
         row,
         created.id,
-        workspace_id=str(row.workspace_id),
+        workspace_id=str(workspace_id),
         name=str(created.name),
     )
 
@@ -1335,11 +1525,14 @@ async def _update_document_metadata(
     if row.project_id is None:
         raise ToolActionError("action has no target project")
     document_id = UUID(row.arguments["document_id"])
-    scope = (
-        Collection.workspace_id == row.workspace_id
-        if row.workspace_id is not None
-        else Collection.id == row.project_id
-    )
+    if _row_kind(row) == "account":
+        scope: ColumnElement[bool] = account_scope_condition(
+            row.user_id, row.organization_id
+        )
+    elif row.workspace_id is not None:
+        scope = Collection.workspace_id == row.workspace_id
+    else:
+        scope = Collection.id == row.project_id
     folders = await _folders_holding(db, document_id, row.organization_id, scope)
     if row.project_id not in folders:
         # It left the folder the action was aimed at.

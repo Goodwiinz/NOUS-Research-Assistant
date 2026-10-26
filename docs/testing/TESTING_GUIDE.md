@@ -1,5 +1,7 @@
 # Comprehensive Testing Guide for Multimodal Enterprise RAG Platform
 
+> **Stale (2026-10-17): this guide predates the current test layout and qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Many test paths it cites (for example `src/tests/...`) do not exist, and frontend commands use `npm`; the repository uses `pnpm`. For current gates and commands use the [testing contract](../engineering/testing.md).**
+
 ## Overview
 
 This guide provides detailed instructions for testing all features of your multimodal RAG platform, including unit tests, integration tests, end-to-end tests, and manual testing procedures.

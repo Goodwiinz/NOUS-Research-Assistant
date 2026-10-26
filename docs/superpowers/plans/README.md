@@ -40,3 +40,6 @@ Task-by-task implementation and repair plans paired with design records. Read th
 | [2026-09-25-live-agent-qa-failure-repair.md](2026-09-25-live-agent-qa-failure-repair.md) | Live Agent Q&A Failure Repair Implementation Plan |
 | [2026-09-27-01-local-codex-bridge.md](2026-09-27-01-local-codex-bridge.md) | Local Codex Bridge Implementation Plan |
 | [2026-09-27-daily-research-brief.md](2026-09-27-daily-research-brief.md) | Daily Research Brief Implementation Plan |
+| [2026-10-03-goo-350-account-isolation.md](2026-10-03-goo-350-account-isolation.md) | GOO-350 account isolation implementation plan |
+| [2026-10-09-linear-remainder.md](2026-10-09-linear-remainder.md) | Linear implementation remainder |
+| [2026-10-11-artifact-workspace-completion.md](2026-10-11-artifact-workspace-completion.md) | Artifact Workspace Completion Implementation Plan |

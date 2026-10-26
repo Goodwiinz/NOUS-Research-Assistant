@@ -11,7 +11,7 @@ DETAIL: Key (name)=(Demo Organization) already exists.
 
 ### Root Cause
 
-In [auth_service.py:175-188](rag/backend/src/services/auth_service.py#L175-L188), when a user registered with an `organization_name`, the code would always attempt to create a new organization without checking if one with that name already existed.
+In `auth_service.py:175-188` (written against `rag/backend/src/services/auth_service.py`, which is no longer in the tree), when a user registered with an `organization_name`, the code would always attempt to create a new organization without checking if one with that name already existed.
 
 ```python
 # OLD CODE (BROKEN)
@@ -98,7 +98,7 @@ Expected output:
 
 ## Files Changed
 
-1. [rag/backend/src/services/auth_service.py](rag/backend/src/services/auth_service.py#L175-L198) - Updated `register_user` method
+1. `backend/src/services/auth_service.py` (path from the original session; no longer in the tree) - Updated `register_user` method
 
 ## Test Files Created
 

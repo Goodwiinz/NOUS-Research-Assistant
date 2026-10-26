@@ -8,8 +8,10 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 
 | Directory | Contents |
 | --- | --- |
-| [r8-release-chain-20261016/ (external PR commit)](https://github.com/Goodwiinz/NOUS-Research-Assistant/blob/ca0c0cd642a926b18a18f5b74df8b2fb9a7277d4/docs/testing/evidence/r8-release-chain-20261016/README.md) | PR #2022 exact-source proof, separate from this checkout until merged: real manuscript packages through review updates, targeted staleness, fresh read-only exports, required citation-chase receipts, causal mutations and the PRISMA self-invalidation correction |
+| [r8-release-chain-20261016/](r8-release-chain-20261016/README.md) | PR #2022 exact-source proof: real manuscript packages through review updates, targeted staleness, fresh read-only exports, required citation-chase receipts, causal mutations and the PRISMA self-invalidation correction |
 | [linear-release-20261016/](linear-release-20261016/README.md) | GOO-337/319/320 current source and read-only dev release evidence, exact image/CI/runtime boundaries, authenticated list/detail checks and remaining overnight commitments |
+| [linear-endpoints-20261016/](linear-endpoints-20261016/README.md) | GOO-219/237–241: endpoint repairs, 3,039 frontend tests, strict type/lint gates, mutation proof and separate Fable code/security reviews |
+| [verify-login-20261016/](verify-login-20261016/README.md) | Local frontend + configured dev API: login assertions and both visual checkpoints PASS; backend SHA unknown |
 | [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): HITL approve and deny and project creation via chat PASS; chat send/stream/reload PASS except the terminal-state criterion (run still in flight at the streamed checkpoint); screenshots reviewed |
 | [verify-chat-send-stream-reload-20261009/](verify-chat-send-stream-reload-20261009/README.md) | nous-verify deployed-lane run: document upload PASS; chat journeys failed on a test selector defect (superseded by -r2) |
 | [verify-login-20261009/](verify-login-20261009/README.md) | nous-verify deployed-lane run: login PASS; chat timed out at the 30 s default (superseded) |
@@ -17,3 +19,6 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 | [daily-research-brief-release-20261008/](daily-research-brief-release-20261008/README.md) | GOO-336/GOO-337 release-evidence refresh on `develop` `9c90ed8d3`: frontend validation, disabled-state and review-overlay tests, the PostgreSQL lifecycle regression bisect, and read-only checks of the dev lane |
 | [daily-research-brief-task8-followup-20260928/](daily-research-brief-task8-followup-20260928/README.md) | Retained records and supporting files |
 | [harness-live-proof-20261005/](harness-live-proof-20261005/README.md) | Local-stack run of the harness live-proof runbook (patched tree, not the dev lane) and the defects it found |
+
+- [Historical MCP discovery decision (2026-10-16)](discovery-harness-20261016/README.md): Codex-only objective 1/5 against pinned primitive surface; NOT GATED, with current-tool/live-quality boundaries.
+- [Integration audit fixes (2026-10-16)](integration-audit-20261016/README.md): selected-context paging, live chat bindings, lean null handoff reads and independent Fable reviews.

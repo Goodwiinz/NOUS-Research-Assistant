@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.agent_outbox import AgentOutbox
@@ -22,6 +22,11 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.run_event_store import append_event
 from src.services.agent.run_event_types import RunEventType
+from src.services.harness.account import (
+    ProjectOutsideAccount,
+    consent_kind,
+    project_in_account,
+)
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     _validate_grant,
@@ -45,17 +50,30 @@ async def authorize_external_submission(
     device_id: UUID,
     workspace_id: UUID,
     thread_id: UUID,
+    project_id: UUID | None = None,
 ) -> None:
-    """Recheck authority even for idempotent acceptance replays; no writes."""
+    """Recheck authority even for idempotent acceptance replays; no writes.
+
+    ``project_id`` is the run's project. A project or run grant must name the
+    same one (callers may leave it out at acceptance). An account pairing
+    grant names none: the caller passes the run's project. Under an account
+    approval (its pairing grant, or a run grant minted from it) the project
+    must be in the account on this call, and an account folder serves it.
+    """
     grant = await db.scalar(
         select(IntegrationGrant)
         .where(IntegrationGrant.id == context.grant_id)
         .execution_options(populate_existing=True)
     )
     grant = await _validate_grant(db, grant)
+    # The binding_kind comparison here, and the account-without-approval raise
+    # below, are defense in depth behind _validate_grant (which already ties an
+    # account grant to an account approval): they keep a mismatched context
+    # from being trusted if that validation ever loosens.
     if (
         grant.user_id != context.user_id
         or grant.organization_id != context.organization_id
+        or grant.binding_kind != context.binding_kind
         or grant.project_id != context.project_id
         or grant.thread_id != context.thread_id
         or grant.run_id != (str(context.run_id) if context.run_id else None)
@@ -63,21 +81,45 @@ async def authorize_external_submission(
         or "harness:execute" not in grant.scopes
     ):
         raise IntegrationAccessDenied()
+    target: UUID | None
+    if grant.binding_kind == "account":
+        # Naming no project is a caller bug, not a project that left the
+        # account: refuse plainly so it is not reported as unreachable.
+        if project_id is None:
+            raise IntegrationAccessDenied()
+        target = project_id
+    elif grant.binding_kind == "project" and project_id in (None, grant.project_id):
+        target = grant.project_id
+    else:
+        raise IntegrationAccessDenied()
     if context.thread_id is not None and context.thread_id != thread_id:
         raise IntegrationAccessDenied()
+    under_account = await consent_kind(db, grant.request_id) == "account"
+    if grant.binding_kind == "account" and not under_account:
+        raise IntegrationAccessDenied()
+    if under_account and not await project_in_account(
+        db,
+        user_id=grant.user_id,
+        organization_id=grant.organization_id,
+        project_id=target,
+    ):
+        raise ProjectOutsideAccount()
     await validate_binding(
         db,
         user_id=context.user_id,
         organization_id=context.organization_id,
-        project_id=context.project_id,
+        project_id=target,
         thread_id=thread_id,
         device_id=device_id,
     )
+    folders = [WorkspaceBinding.project_id == target]
+    if under_account:
+        folders.append(WorkspaceBinding.project_id.is_(None))
     binding = await db.scalar(
         select(WorkspaceBinding).where(
             WorkspaceBinding.device_id == device_id,
             WorkspaceBinding.workspace_id == workspace_id,
-            WorkspaceBinding.project_id == context.project_id,
+            or_(*folders),
             WorkspaceBinding.is_deleted.is_(False),
         )
     )

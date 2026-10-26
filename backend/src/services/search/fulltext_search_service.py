@@ -121,6 +121,23 @@ class FullTextSearchService:
         self.snippet_length = 200
         self.snippet_surround = 50
 
+    def get_rebuild_documents(
+        self, organization_id: Any, db: Session = None
+    ) -> List[Document]:
+        """Return completed documents eligible for an organization-scoped rebuild."""
+        session = db or self.db
+        if session is None:
+            raise ValueError("Database session is required")
+        return (
+            session.query(Document)
+            .filter(
+                Document.organization_id == organization_id,
+                Document.processing_status == ProcessingStatus.COMPLETED,
+                Document.is_deleted == False,
+            )
+            .all()
+        )
+
     def search(
         self,
         search_request: Optional[SearchQuery] = None,
@@ -276,6 +293,12 @@ class FullTextSearchService:
         db: Session = None,
     ) -> List[Dict[str, Any]]:
         """Backward-compatible async search interface used by older unit tests."""
+        # Fail closed before any SQL, like _require_org_scope: a caller with
+        # no organization gets an empty result, never an unscoped query.
+        if not organization_id:
+            logger.error("Full-text legacy search refused: no organization_id supplied")
+            return []
+
         if not query.strip():
             return []
 
@@ -329,21 +352,23 @@ class FullTextSearchService:
         # read better on this endpoint's plain response. HybridSearchService
         # ._normalize_score() undoes this x10 before fusing across sources —
         # if this multiplier ever changes, that undo must change with it.
+        # search_vector is built with English stemming, so pin query parsing
+        # to English instead of relying on a database's default text config.
         query_parts = [
             "SELECT",
             "    d.id, d.title, d.document_type, d.content_text, d.content_summary,",
             "    d.file_size_bytes, d.created_at, d.updated_at, d.processing_status,",
             "    d.tags, d.is_public, d.uploaded_by_user_id, d.organization_id, d.document_metadata,",
-            "    ts_rank_cd(search_vector, plainto_tsquery(:query)) * 10 as relevance_score,",
-            "    ts_headline('english', coalesce(d.content_text, ''), plainto_tsquery(:query),",
+            "    ts_rank_cd(search_vector, plainto_tsquery('english', :query)) * 10 as relevance_score,",
+            "    ts_headline('english', coalesce(d.content_text, ''), plainto_tsquery('english', :query),",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords={self.snippet_length}, MinWords={self.snippet_surround}') as highlighted_content,",
-            "    ts_headline('english', coalesce(d.title, ''), plainto_tsquery(:query),",
+            "    ts_headline('english', coalesce(d.title, ''), plainto_tsquery('english', :query),",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords=50, MinWords=10') as highlighted_title",
             "FROM documents d",
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery(:query)",
+            "    AND search_vector @@ plainto_tsquery('english', :query)",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",
@@ -398,7 +423,7 @@ class FullTextSearchService:
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery(:query)",
+            "    AND search_vector @@ plainto_tsquery('english', :query)",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",
@@ -710,7 +735,52 @@ class FullTextSearchService:
         }
 
     def create_search_indexes(self, db: Session = None):
-        """Create necessary full-text search indexes"""
+        """Create the legacy full-text search indexes (operator/CLI use only).
+
+        Index DDL is deployment-owned and lives in Alembic. Do not call this
+        from a request handler: a tenant admin's HTTP request must not run
+        global ``CREATE INDEX`` against the shared ``documents`` table (see
+        ``api.search.search.rebuild_search_indexes``). Kept only as a
+        compatibility export for ad-hoc scripts.
+
+        What deployment (Alembic) already provides for the active query:
+          - ``idx_documents_search_gin`` (``p3q4r5s6t7u8``) — GIN on
+            ``search_vector`` (partial, ``WHERE search_vector IS NOT NULL``).
+            Backs the predicate ``search_vector @@ plainto_tsquery(:query)`` in
+            ``_build_search_query`` / ``_build_count_query``.
+          - ``idx_documents_org_deleted_created`` (``p3q4r5s6t7u8``) —
+            (organization_id, is_deleted, created_at). Backs the
+            ``organization_id = :org`` + ``is_deleted = false`` predicates and
+            the ``created_at`` sort.
+          - ``idx_documents_org_status_processing`` (``f931599b6b5b``) —
+            (organization_id, processing_status, document_type). Backs the
+            ``processing_status = :completed_status`` predicate within the org.
+          - ``idx_document_org_status`` (organization_id, processing_status)
+            and ``idx_document_org_type`` (organization_id, document_type)
+            (``perf_indexes_n1``, ``performance_indexes_n_plus_1_fix.py``) —
+            also declared on the ORM model. The first is a second, narrower
+            match for the org + status predicate.
+
+        What this method and ``alembic/standalone/add_fulltext_search.py``
+        create beyond that is legacy/ad-hoc only:
+          - ``idx_documents_search_vector`` — non-partial duplicate of the GIN
+            above.
+          - ``idx_documents_title_gin`` / ``idx_documents_content_gin`` —
+            expression GINs on ``to_tsvector('english', title|content_text)``.
+            The active query never filters on those expressions (``ts_headline``
+            is output formatting, not a predicate), so they are unused.
+          - ``idx_documents_created_at`` — plain ``created_at DESC``; the
+            active sort is always applied after the org/search filters, which
+            the org-prefixed composite already covers.
+          - ``idx_documents_type_status`` — (document_type, processing_status);
+            the org-prefixed ``idx_documents_org_status_processing`` and
+            ``idx_document_org_status`` already cover the status predicate for
+            every org-scoped search.
+
+        Migration decision: no additional Alembic migration is needed. Every
+        index the active query requires is already created by deployment;
+        the remainder is not referenced by any active predicate or sort.
+        """
         if not db:
             db = next(get_db_sync())
 
