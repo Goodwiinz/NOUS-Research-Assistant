@@ -8,6 +8,8 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 
 | Directory | Contents |
 | --- | --- |
+| [r8-release-chain-20261016/](r8-release-chain-20261016/README.md) | PR #2022 exact-source proof: real manuscript packages through review updates, targeted staleness, fresh read-only exports, required citation-chase receipts, causal mutations and the PRISMA self-invalidation correction |
+| [linear-release-20261016/](linear-release-20261016/README.md) | GOO-337/319/320 current source and read-only dev release evidence, exact image/CI/runtime boundaries, authenticated list/detail checks and remaining overnight commitments |
 | [linear-endpoints-20261016/](linear-endpoints-20261016/README.md) | GOO-219/237–241: endpoint repairs, 3,039 frontend tests, strict type/lint gates, mutation proof and separate Fable code/security reviews |
 | [verify-login-20261016/](verify-login-20261016/README.md) | Local frontend + configured dev API: login assertions and both visual checkpoints PASS; backend SHA unknown |
 | [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): HITL approve and deny and project creation via chat PASS; chat send/stream/reload PASS except the terminal-state criterion (run still in flight at the streamed checkpoint); screenshots reviewed |

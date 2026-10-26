@@ -1,0 +1,369 @@
+{
+  "schema": "nous.testing.r8-local-evidence.v1",
+  "classification": "Local real-provider/process diagnostic; not deployed HTTP/MCP or methods acceptance",
+  "recorded_at": "2026-10-16T11:33:41.814175+00:00",
+  "declaration": {
+    "declared_at": "2026-10-16T11:20:17.899641+00:00",
+    "source_revision": "0f2541c68ef91eeed0fbad840e8cded4b1f0b2a1",
+    "source_dirty": false,
+    "files": {
+      "backend/scripts/validation/r8_live_proof.py": "0f22342cdbb3ec20ac253082d885708dc0992c5b958f291e0995b5e487a914fb",
+      "backend/src/services/research_engine/search_update_service.py": "c1cb3b07a03092e46dfa96995d46e6a5b6774c62c08cd79668737fc4b69e2e7b",
+      "backend/src/services/research_engine/search_update_rules.py": "0ad3cd3ba625205fffbfa434cb2c3e66bbae5f05f26bd1bd63dfcf33e8b41b42",
+      "backend/src/services/research_engine/review_update_service.py": "d5e5719556deb497ae51abe067d672657876c0f284278ba1a9a48aa5b0d10eeb",
+      "backend/src/tasks/search_update_tasks.py": "0162eaae8b6449e9c73a4fd6ee1425bb73f5f8434119c04390d38cbfed24298b",
+      "backend/src/tasks/celery_app.py": "2a96896558248a16b779a63bc446a0d180904e64b1b2104d6d30b420b787c5cb",
+      "backend/tests/integration/research_engine_postgres_support.py": "3395e7c431e5ce1fae3d234ca84b1d35c39fa7a362efa48fdab4ec9df463fe8d",
+      "backend/tests/integration/test_report_identity_postgres.py": "fd984884c66b418e4c44fe28d1be8ea75708041da38d53023b698a519c26e79c"
+    },
+    "classification": "Local real-provider/process diagnostic; not deployed HTTP/MCP or methods acceptance",
+    "scenarios": [
+      "outage",
+      "main",
+      "warm worker restart",
+      "two beat processes",
+      "review chain and exports",
+      "revoke"
+    ],
+    "crash": "NOT RUN: --allow-hard-kill omitted; no stale-timeout override",
+    "private_database_prefix": "r8_proof_",
+    "provider_configuration": "Crossref, PubMed, OpenAlex defaults; no secret-manager injection",
+    "prior_attempt": "V1 bootstrap failed before scenarios: synchronous Alembic given asyncpg driver; scratch removed; not a product result"
+  },
+  "checks": {
+    "passed": 28,
+    "failed": 0,
+    "not_run": 1,
+    "outcomes": [
+      {
+        "name": "chain.root_carries_four_decisions",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.succeeded",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.crossref_not_ok",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.no_fabricated_retraction",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.retracted_doi_unknown_provider_failed",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.finished_before_main_fire",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.not_run",
+        "status": "NOT RUN"
+      },
+      {
+        "name": "main.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "main.two_beats_ticking",
+        "status": "PASS"
+      },
+      {
+        "name": "main.attempts",
+        "status": "PASS"
+      },
+      {
+        "name": "main.all_five_classes",
+        "status": "PASS"
+      },
+      {
+        "name": "main.retraction_notice_real",
+        "status": "PASS"
+      },
+      {
+        "name": "main.single_import_receipt",
+        "status": "PASS"
+      },
+      {
+        "name": "main.export_hash_stable",
+        "status": "PASS"
+      },
+      {
+        "name": "main.two_distinct_corpus_snapshots",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.successor_idempotent",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.unchanged_decision_carried_by_reference",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.uncertain_unknown_carried_with_flag",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.required_work_matches_delta_classes",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.targeted_queue_assigned_to_reviewer",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.accounting_unresolved_while_work_open",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.accounting_reconciles_after_review",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.exports_reload_identically",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.reviewer_cannot_create_version",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.foreign_cannot_create_version",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.failed_project_archived",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.no_import_receipt",
+        "status": "PASS"
+      }
+    ]
+  },
+  "outage": {
+    "counts": {
+      "changed": 0,
+      "corrected_retracted": 0,
+      "new": 20,
+      "unchanged": 0,
+      "unknown": 4
+    },
+    "coverage_providers": {
+      "crossref": {
+        "completion": "failed",
+        "error_type": "ConnectError",
+        "limit": 10,
+        "returned": 0,
+        "status": "failed"
+      },
+      "openalex": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      },
+      "pubmed": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      }
+    }
+  },
+  "main": {
+    "counts": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 28,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "coverage_providers": {
+      "crossref": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      },
+      "openalex": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      },
+      "pubmed": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      }
+    }
+  },
+  "revoke": {
+    "import_receipts": 0
+  },
+  "processes": {
+    "log_summary": {
+      "beat-1": {
+        "beat_ticks_sent": 13,
+        "execution_failures_logged": 0,
+        "exit_code": 0,
+        "log_lines": 31,
+        "tick_received": 0,
+        "tick_succeeded": 0
+      },
+      "beat-2": {
+        "beat_ticks_sent": 9,
+        "execution_failures_logged": 0,
+        "exit_code": 0,
+        "log_lines": 27,
+        "tick_received": 0,
+        "tick_succeeded": 0
+      },
+      "redis": {
+        "beat_ticks_sent": 0,
+        "execution_failures_logged": 0,
+        "exit_code": 0,
+        "log_lines": 11,
+        "tick_received": 0,
+        "tick_succeeded": 0
+      },
+      "worker-1-outage": {
+        "beat_ticks_sent": 0,
+        "execution_failures_logged": 0,
+        "exit_code": 0,
+        "log_lines": 82,
+        "tick_received": 3,
+        "tick_succeeded": 3
+      },
+      "worker-2-normal": {
+        "beat_ticks_sent": 0,
+        "execution_failures_logged": 0,
+        "exit_code": 0,
+        "log_lines": 134,
+        "tick_received": 19,
+        "tick_succeeded": 19
+      }
+    },
+    "worker_1_warm_shutdown_confirmed": true,
+    "all_owned_children_stopped": true
+  },
+  "duplicate_ticks": {
+    "observed_at": "2026-10-16T11:28:57.473255+00:00",
+    "main_execution_count_after_later_ticks": 1,
+    "beat-1": {
+      "ticks_sent": 8,
+      "ticks_in_main_fire_minute": 1
+    },
+    "beat-2": {
+      "ticks_sent": 5,
+      "ticks_in_main_fire_minute": 1
+    }
+  },
+  "fresh_process_exports": {
+    "status": "completed",
+    "recorded_at": "2026-10-16T11:30:05.015693+00:00",
+    "fresh_process": true,
+    "fresh_readonly_sessions": 2,
+    "canonical_body_hashes_match_persisted_original": true,
+    "exported_at_excluded_from_body_hash": true,
+    "results": [
+      {
+        "fresh_session": 1,
+        "hashes": {
+          "root": "fe753bf073c8cfd0bbac29c93fdda79930a81fe482609bc99dd3d308622d6108",
+          "successor": "07d2977df8deff805a7d5c401fd15bc19fcf237b68a8eba99af5f58e063bb58f"
+        }
+      },
+      {
+        "fresh_session": 2,
+        "hashes": {
+          "root": "fe753bf073c8cfd0bbac29c93fdda79930a81fe482609bc99dd3d308622d6108",
+          "successor": "07d2977df8deff805a7d5c401fd15bc19fcf237b68a8eba99af5f58e063bb58f"
+        }
+      }
+    ]
+  },
+  "cleanup": {
+    "scratch_database_removed": true
+  },
+  "limitations": [
+    "Crash schedule fired normally; no hard kill or stale-attempt recovery tested",
+    "One worker at concurrency1; duplicate ticks serialized, not concurrent SKIP LOCKED contention",
+    "Harness export checks repeat within one session; independent fresh process covers two new readonly sessions",
+    "403/404 harness denials stop in project access before version creation",
+    "Synthetic users/projects and local native processes, no deployed/authenticated HTTP/MCP journey",
+    "Fable is a code/evidence review, not a qualified methods-expert acceptance"
+  ],
+  "bootstrap_attempt": {
+    "status": "NOT RUN before scenarios",
+    "reason": "V1 synchronous Alembic received asyncpg URL; V2 corrected only migration subprocess driver",
+    "scratch_database_removed": true
+  },
+  "retained_raw_files_sha256": {
+    "declaration.json": "6f4ebbb5719312f1b605478df9632731c8acede7ebbff49e841a6795195427a6",
+    "evidence/checks.json": "4280e0a044991acc2346709a21d23a60f7c89be5075d525d1cf6fb1a209c597f",
+    "evidence/delta-main.json": "0371714217b5640f48e326669616db42127403169e48048297be5761c31b79b6",
+    "evidence/log-excerpts.txt": "6c94f1606d36231c03f90b0ca4646f06af31c4e5ae7b68da5fdc4cb9767abfc1",
+    "evidence/log-summary.json": "cd46904b5148860263348dbbe3b443e1eac4e2fde03c793eee1edc0fd25baf77",
+    "evidence/review-chain.json": "27107c5da306a1d1027a60ed1c973bce3bf79fc34573a4d2a20456d29b559571",
+    "evidence/review-version-root-export.json": "4fe8aab6471ae2f3a2ba3e84fd66423578e4d303e01b791f9669d57e92e98c41",
+    "evidence/review-version-successor-export.json": "f1596daf481a29ee65a88b4534e0c9880d709eff8cc641733830584852671fd3",
+    "evidence/scenario-main.json": "cc58cfa6066f3e90975db32adb9b7d9d343072ea03835090fbf9ce595e67b404",
+    "evidence/scenario-outage.json": "0ed7d8867ffde6f187ad3e923c47c682cc13af5be1d6467657b89ba6a5963c4b",
+    "evidence/scenario-revoke.json": "93b3c2f949efbd7100e3c01edc345e70ac46d1a999a90ba23acba0d366a23d22",
+    "evidence/snapshots-main.json": "ad9c56969f4133f1d93577244b87e66f7f56bc521a894fd574968b86038aa08d",
+    "evidence/state.json": "94cbeaef4cdc55759bc8f5dcdc5ff9034c830b68496d7d7c21abedfa0c4925ba",
+    "evidence/timeline.json": "17d6926516b8241c3683aa8bdd5d5349c38d31ddbe6404b3a26c7375e8cbd7d9",
+    "fresh-export-declaration.json": "82d3f7c5c5dad04504796832412344e27e230b4ff82314b70f3f4819e37e7f00",
+    "fresh-export-result.json": "b626cfc3d2174337696f57e1968f745125acd8876049001e339328cfd16ebe72",
+    "late-observation.json": "62233d24c077381bc8e2fbb71d958bcc98f0b77c97400e36546b535f7f4f1727",
+    "migration.log": "05f3e8f3cd205bafd1444fc982fc4ec97d503f3a9c5b82dc01d7f5d8dbb938a1",
+    "result.json": "ca3a0077f714633ae791b8b6b6eaf65f0292e907652a733f9a67fd0617695640",
+    "run.log": "544d790591bd8227911b561fdc15a13c0636d6976cbec0901d6ba68181d0e7a4",
+    "scratch/beat-1-schedule.db": "06b98babd898703047a9fdf1192b4c621f9a5fe28f609ba926380d0cd520014f",
+    "scratch/beat-2-schedule.db": "91ce36225e55710be67a784e37721f146192c835c97f1b246b084bfda64cffd2",
+    "scratch/logs/beat-1.log": "b188d46841c7a4f09784e5c0c3a3c08a0b1b3e931d7568f42eafe601ad85edce",
+    "scratch/logs/beat-2.log": "b58c13e59c6333a6906f11350d5eff41da377fa22ef6b0ad1168f7feb129990f",
+    "scratch/logs/redis.log": "a162e164fca2786a576a1c5f3f9f355b246f5f5bbd12491f37e8e667326f06ef",
+    "scratch/logs/worker-1-outage.log": "e07513daba82645a36c3e6e40b59dbe34ab9ad153ee85f02550ae3b97fefd0b1",
+    "scratch/logs/worker-2-normal.log": "7b4dbd5063575575332d263f0f1c9d22703f6d30ad5f57b32021bec8bc7da08f"
+  },
+  "retained_adapter_sha256": {
+    "run-r8-owned-proof.py": "3d35eb42717ce73614003e627d2fb957fa8b5b16a472582a0b49f77409cef89d",
+    "r8-fresh-export-read.py": "8871eaf5e5e6220827d2edea437b664297f1f31e935ae707f3023fdca1e0a29e",
+    "r8-late-observer.py": "3dfd250a7ba3a871384ffe43daf850ce0d59a5e6ecdacb175fb7776f543a6d0a"
+  },
+  "observed_non_search_health_checks": {
+    "task": "src.tasks.document_processing_tasks.health_check",
+    "received": 4,
+    "returned_unhealthy": 4,
+    "error_type": "MissingGreenlet",
+    "scope": "Local harness passes asyncpg URL to a synchronous SessionLocal consumer; no deployed defect inferred",
+    "search_update_execution_failures_logged": 0
+  },
+  "observed_provider_retry": {
+    "provider": "crossref",
+    "http_status": 429,
+    "same_request_later_status": 200,
+    "scope": "Observed later success at the identical URL; raw evidence retained"
+  }
+}
