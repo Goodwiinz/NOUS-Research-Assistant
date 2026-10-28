@@ -111,3 +111,4 @@ Dated implementation proposals, task breakdowns, remediation roadmaps and delive
 | [2026-10-13-grant-resume-design.md](2026-10-13-grant-resume-design.md) | Resuming a lapsed harness pairing without a new browser approval |
 | [2026-10-13-grant-resume.md](2026-10-13-grant-resume.md) | Resume a lapsed harness pairing: implementation plan |
 | [2026-10-28-machine-handoff-design.md](2026-10-28-machine-handoff-design.md) | Handing a coding task from the NOUS agent to Codex on a paired machine |
+| [2026-10-28-machine-handoff.md](2026-10-28-machine-handoff.md) | Machine handoff: implementation plan |
