@@ -4,7 +4,7 @@
 
 **Goal:** A NOUS chat turn can hand a coding task brief to Codex on the user's paired machine, pause durably while Codex works (with a live card, command approvals and Cancel), and continue the same turn with Codex's reply and outcome facts.
 
-**Architecture:** The graph gets a `run_on_machine` tool, served by two new nodes. `handoff_approval_node` asks for approval, and the card on that approval proposes a machine and folder that the user can change. `handoff_node` creates a child Codex run (`agent_runs.parent_run_id`) and pauses on a second LangGraph interrupt. The stream producer parks the parent as the new active status `delegated` and emits a terminal `handoff_started` frame. When the child reaches a terminal state, `finalize_submission` writes a `handoff.resume` outbox row in the same transaction. A 2-second Celery beat drain claims that row once and resumes the parent's graph with the outcome. The bridge adds command text, exit codes and changed paths to completed tool items.
+**Architecture:** The graph gets a `run_on_machine` tool, served by two new nodes. `handoff_approval_node` asks for approval, and the card on that approval proposes a machine and folder that the user can change. `handoff_node` creates a child Codex run (`agent_runs.parent_run_id`) and pauses on a second LangGraph interrupt. The stream producer parks the parent as the new active status `delegated` and emits a terminal `handoff_started` frame. When the child reaches a terminal state, `finalize_submission` writes a `handoff.resume` outbox row in the same transaction. A 2-second Celery beat drain claims that row once and resumes the parent's graph with the outcome; if that worker dies, a later drain retries. The bridge adds command text, exit codes and changed paths to completed tool items.
 
 **Tech Stack:** FastAPI, SQLAlchemy, Alembic, PostgreSQL, LangGraph, Celery; TypeScript on Node 24 (`packages/harness-bridge`, `node:test`); Next.js + Vitest (`frontend`).
 
@@ -19,7 +19,7 @@ The Decisions table is unchanged. These are changes of mechanism, each forced by
 1. **The producer parks the parent, not the node (design §3 step 2).** The approval receipt hashes the saved checkpoint id and interrupt (`confirmation_service.pending_approval`), and that checkpoint exists only after `interrupt()` returns control to the producer. So `handoff_node` creates the child and interrupts, and the stream producer then sets `delegated`, stores the receipt as `run_metadata.handoff_approval_id` and emits the frame. The producer is already the code that parks approvals (`streaming.py` at three sites). `delegated` is still set before the stream ends, and the frame is still the last one.
 2. **Two nodes instead of "the existing interrupt node + a handoff node" (§1, §3).** The generic `interrupt_node` (`_nodes_tools.py:314-357`) cannot fill in a proposed target or refuse before it asks. LangGraph matches sequential `interrupt()` calls in one node by call order, and `docs/engineering/agent-approvals.md` notes that it can reuse an interrupt id. If one node held both interrupts and took a different branch on replay (for example, the device went away), it would hand the approval decision to the outcome interrupt. So the approval lives in `handoff_approval_node`, which stores its decision in a new state key `handoff_decision`. `handoff_node` holds exactly one interrupt. Each node replays deterministically, and each remains idempotent by `tool_call_id`.
 3. **The SSE frame is `handoff_started`, not `handoff.started` (§3, §5).** The SSE vocabulary is snake_case (`AgentStreamEvent`, `shared/enums.py:291-326`). Dotted names belong to the run-event ledger.
-4. **The resume uses a beat drain instead of an enqueued task plus a sweeper re-queue (§7).** The resume record is an `agent_outbox` row with `kind="handoff.resume"`, keyed by the **child** run id. `uq_agent_outbox_run` becomes `uq_agent_outbox_run_kind (run_id, kind)`, so each handoff gets one row and one parent can hand off more than once. The drain `drain_handoff_resumes` runs every 2 s on the `agent_runs` queue, like `drain_artifacts` and `drain_integration_actions`. It claims each row once, which is the claim-once task, and it picks up unclaimed rows on its next tick, which is the re-queue. The stale-run sweeper only skips `delegated` rows.
+4. **The resume uses a beat drain instead of an enqueued task plus a sweeper re-queue (§7).** The resume record is an `agent_outbox` row with `kind="handoff.resume"`, keyed by the **child** run id. `uq_agent_outbox_run` becomes `uq_agent_outbox_run_kind (run_id, kind)`, so each handoff gets one row and one parent can hand off more than once. The drain `drain_handoff_resumes` runs every 2 s on the `agent_runs` queue, like `drain_artifacts` and `drain_integration_actions`. It claims each row once, which is the claim-once task, and it picks up unclaimed rows on its next tick, which is the re-queue. If the worker dies after claiming, the drain re-claims the row once the parent misses heartbeats for 5 minutes (up to 3 attempts). After that, the turn closes with Codex's reply saved, so the outcome is never lost. The stale-run sweeper only skips `delegated` rows.
 5. **The resume path is assembled from existing parts, not `_resume_agent_graph` (§7).** `_resume_agent_graph` (`agent_execution_service.py:2955-3483`) requires the Redis job record and a `/confirm` claim, and a stream-created run has neither. The new `resume_handoff_parent` uses the same parts:
    - `compile_agent_graph`;
    - `require_approval` against the stored receipt;
@@ -3325,15 +3325,18 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Step 1: Failing tests**
 
 ```python
-"""Resume drain: claim once, outcome, graph resume, assistant row.
+"""Resume drain: claim once, retry after a lost worker, outcome, graph resume.
 
 Mutation checks: dropping the parent ``status == delegated`` predicate in
-claim_handoff_resume fails test_two_drains_claim_once; dropping the outbox
-``status == pending`` predicate fails it too.
+claim_handoff_resume fails test_two_drains_claim_once; dropping the
+``updated_at < stale_before`` fence fails it too (a live dispatched row would
+be re-claimed); dropping the attempts check fails
+test_exhausted_attempts_keep_codex_reply.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -3420,6 +3423,78 @@ async def test_drain_resumes_and_completes(db: AsyncSession, context: Any, monke
     assert await handoff_resume.drain_handoff_resumes(db) == 1
     (claim, outcome), _ = resumed.await_args
     assert claim.parent_run_id == parent and outcome["status"] == "completed"
+    assert claim.attempt == 1
+
+
+async def _age_parent(db: AsyncSession, parent: str, seconds: int) -> None:
+    """Simulate a resume worker that died: no heartbeat for ``seconds``."""
+    await db.execute(
+        update(AgentRun).where(AgentRun.job_id == parent).values(
+            updated_at=datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        )
+    )
+    await db.commit()
+
+
+async def test_stale_dispatched_parent_is_reclaimed(db: AsyncSession, context: Any) -> None:
+    parent, child = await finished_child(db)
+    first = await handoff_resume.claim_handoff_resume(db)
+    assert first is not None and first.attempt == 1
+    # The worker that claimed it crashed: the parent stays running, unbeaten.
+    await _age_parent(db, parent, handoff_resume.RECLAIM_AFTER_SECONDS + 60)
+    retry = await handoff_resume.claim_handoff_resume(db)
+    assert retry is not None and (retry.parent_run_id, retry.child_run_id) == (parent, child)
+    assert retry.attempt == 2
+    # The retry re-arms the fence: a third drain right away gets nothing.
+    assert await handoff_resume.claim_handoff_resume(db) is None
+
+
+async def test_finished_parent_is_never_reclaimed(db: AsyncSession, context: Any) -> None:
+    parent, _child = await finished_child(db)
+    assert await handoff_resume.claim_handoff_resume(db) is not None
+    await db.execute(
+        update(AgentRun).where(AgentRun.job_id == parent).values(status="completed")
+    )
+    await db.commit()
+    await _age_parent(db, parent, handoff_resume.RECLAIM_AFTER_SECONDS + 60)
+    assert await handoff_resume.claim_handoff_resume(db) is None
+
+
+async def test_exhausted_attempts_keep_codex_reply(
+    db: AsyncSession, context: Any, monkeypatch
+) -> None:
+    parent, _child = await finished_child(db)
+    monkeypatch.setattr(handoff_resume, "MAX_RESUME_ATTEMPTS", 1)
+    assert await handoff_resume.claim_handoff_resume(db) is not None  # attempt 1 "crashes"
+    await _age_parent(db, parent, handoff_resume.RECLAIM_AFTER_SECONDS + 60)
+    resumed = AsyncMock()
+    gave_up = AsyncMock()
+    monkeypatch.setattr(handoff_resume, "resume_handoff_parent", resumed)
+    monkeypatch.setattr(handoff_resume, "close_with_codex_reply", gave_up)
+    assert await handoff_resume.drain_handoff_resumes(db) == 1
+    resumed.assert_not_awaited()
+    (claim, outcome), _ = gave_up.await_args
+    assert claim.attempt == 2 and outcome["reply"] == "All tests pass."
+
+
+async def test_codex_reply_survives_a_failed_resume(monkeypatch) -> None:
+    from src.services.agent import agent_execution_service
+
+    persisted = AsyncMock(return_value="m1")
+    finalized = AsyncMock()
+    monkeypatch.setattr(agent_execution_service, "_persist_assistant_message_safe", persisted)
+    monkeypatch.setattr(handoff_resume, "finalize_submission", finalized)
+    claim = handoff_resume.HandoffResumeClaim(
+        parent_run_id="p", child_run_id="c", organization_id=None,
+        user_id="u", thread_id="t", approval_id="a" * 64, attempt=3,
+    )
+    await handoff_resume.close_with_codex_reply(
+        claim, {"status": "completed", "reply": "All tests pass."}, model="m"
+    )
+    content = persisted.await_args.kwargs["content"]
+    assert "All tests pass." in content and "could not finish" in content
+    assert finalized.await_args.kwargs["status"] is JobStatus.FAILED
+    assert finalized.await_args.kwargs["payload"]["assistant_message_id"] == "m1"
 ```
 
 In `finished_child`, `finalize_submission(..., run_metadata=...)` replaces the child's metadata. That is fine for these tests. The real path merges it (Task 2.5).
@@ -3439,8 +3514,15 @@ graph with ``Command(resume={interrupt_id: outcome})``. It never reads the
 Redis job record. A row whose parent has not parked yet stays pending for the
 next tick; one whose parent is already terminal is retired as failed.
 
-A worker crash after the claim leaves the parent ``running``; the stale-run
-sweeper then fails it, matching the never-re-run policy of claim_execution.
+A worker that dies after the claim leaves the parent ``running`` with no
+heartbeat. Once ``RECLAIM_AFTER_SECONDS`` pass without one (five missed
+``AGENT_RUN_HEARTBEAT_SECONDS`` beats, well under the stale-run sweeper's
+``AGENT_RUN_STALE_AFTER_SECONDS``), the next drain re-claims the row. The
+guarded ``updated_at < stale_before`` update is the fence, so one drain wins
+each attempt. The resume is safe to repeat only while the checkpoint still
+pauses on the handoff interrupt (``require_approval`` passes). Otherwise, and
+after ``MAX_RESUME_ATTEMPTS``, the turn closes as failed with Codex's reply
+saved as the assistant message, so the outcome is never lost.
 """
 
 from __future__ import annotations
@@ -3449,9 +3531,10 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.agent_outbox import AgentOutbox
@@ -3467,6 +3550,11 @@ from src.shared.enums import AgentOutboxStatus, JobStatus
 logger = logging.getLogger(__name__)
 
 MAX_REPLY_CHARS = 4000
+# Five missed run heartbeats (AGENT_RUN_HEARTBEAT_SECONDS = 60); must stay well
+# under AGENT_RUN_STALE_AFTER_SECONDS (1800) so the drain retries before the
+# sweeper fails the turn.
+RECLAIM_AFTER_SECONDS = 300
+MAX_RESUME_ATTEMPTS = 3
 _OUTCOME_STATUS = {
     JobStatus.COMPLETED.value: "completed",
     JobStatus.FAILED.value: "failed",
@@ -3482,47 +3570,81 @@ class HandoffResumeClaim:
     user_id: Any
     thread_id: Any
     approval_id: str
+    attempt: int
 
 
-async def claim_handoff_resume(db: AsyncSession) -> HandoffResumeClaim | None:
-    """Claim the oldest resumable record. Commits."""
+async def claim_handoff_resume(
+    db: AsyncSession, *, now: datetime | None = None
+) -> HandoffResumeClaim | None:
+    """Claim the oldest resumable record. Commits.
+
+    Resumable: a pending row (first attempt), or a dispatched row whose parent
+    is still ``running`` but has not heartbeated for RECLAIM_AFTER_SECONDS (its
+    worker died). The join keeps dispatched rows of finished parents out of
+    the scan, so they never crowd out new ones.
+    """
+    now = now or datetime.now(timezone.utc)
+    stale_before = now - timedelta(seconds=RECLAIM_AFTER_SECONDS)
+    parent_id_expr = AgentOutbox.payload["parent_run_id"].as_string()
     try:
         rows = (
             await db.execute(
                 select(AgentOutbox)
+                .join(AgentRun, AgentRun.job_id == parent_id_expr, isouter=True)
                 .where(
                     AgentOutbox.kind == HANDOFF_RESUME_KIND,
-                    AgentOutbox.status == AgentOutboxStatus.PENDING.value,
+                    or_(
+                        AgentOutbox.status == AgentOutboxStatus.PENDING.value,
+                        and_(
+                            AgentOutbox.status == AgentOutboxStatus.DISPATCHED.value,
+                            AgentRun.status == JobStatus.RUNNING.value,
+                            AgentRun.updated_at < stale_before,
+                        ),
+                    ),
                 )
                 .order_by(AgentOutbox.created_at)
                 .limit(20)
-                .with_for_update(skip_locked=True)
+                .with_for_update(of=AgentOutbox, skip_locked=True)
             )
         ).scalars().all()
         for outbox in rows:
-            parent_id = str((outbox.payload or {}).get("parent_run_id") or "")
+            payload = dict(outbox.payload or {})
+            parent_id = str(payload.get("parent_run_id") or "")
             parent: Any = await db.get(AgentRun, parent_id, populate_existing=True)
             if parent is None or JobStatus(parent.status).is_terminal:
                 outbox.status = AgentOutboxStatus.FAILED.value
                 continue
+            if outbox.status == AgentOutboxStatus.PENDING.value:
+                fence = and_(
+                    AgentRun.status == JobStatus.DELEGATED.value,
+                    AgentRun.run_metadata["handoff_run_id"].as_string() == outbox.run_id,
+                )
+            else:  # re-claim from a worker that stopped heartbeating
+                fence = and_(
+                    AgentRun.status == JobStatus.RUNNING.value,
+                    AgentRun.updated_at < stale_before,
+                )
             claimed = (
                 await db.execute(
                     update(AgentRun)
                     .where(
                         AgentRun.job_id == parent_id,
                         AgentRun.execution_provider == "nous",
-                        AgentRun.status == JobStatus.DELEGATED.value,
-                        AgentRun.run_metadata["handoff_run_id"].as_string()
-                        == outbox.run_id,
+                        fence,
                     )
-                    .values(status=JobStatus.RUNNING.value)
+                    # updated_at re-arms the fence for the next drain.
+                    .values(status=JobStatus.RUNNING.value, updated_at=now)
                     .returning(AgentRun.job_id)
                     .execution_options(synchronize_session=False)
                 )
             ).first()
             if claimed is None:
-                continue  # not parked yet: next tick
+                continue  # not parked yet, or another drain won: next tick
+            attempt = int(payload.get("attempts") or 0) + 1
+            payload["attempts"] = attempt
+            outbox.payload = payload  # reassign: JSONB is not mutation-tracked
             outbox.status = AgentOutboxStatus.DISPATCHED.value
+            outbox.dispatched_at = now
             await db.commit()
             metadata = parent.run_metadata or {}
             return HandoffResumeClaim(
@@ -3532,6 +3654,7 @@ async def claim_handoff_resume(db: AsyncSession) -> HandoffResumeClaim | None:
                 user_id=parent.user_id,
                 thread_id=parent.thread_id,
                 approval_id=str(metadata.get("handoff_approval_id") or ""),
+                attempt=attempt,
             )
         await db.commit()
         return None
@@ -3562,9 +3685,65 @@ async def drain_handoff_resumes(db: AsyncSession, *, limit: int = 5) -> int:
             break
         outcome = await read_handoff_outcome(db, claim.child_run_id)
         await db.commit()
-        await resume_handoff_parent(claim, outcome)
+        if claim.attempt > MAX_RESUME_ATTEMPTS:
+            await close_with_codex_reply(
+                claim, outcome, model=await _parent_model(db, claim.parent_run_id)
+            )
+        else:
+            await resume_handoff_parent(claim, outcome)
         count += 1
     return count
+
+
+def _assistant_client_message_id(claim: HandoffResumeClaim) -> str:
+    # One id per handoff, so a retried close and a late resume converge on
+    # the same assistant row.
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"nous-assistant-handoff:{claim.parent_run_id}:{claim.child_run_id}",
+        )
+    )
+
+
+async def close_with_codex_reply(
+    claim: HandoffResumeClaim, outcome: dict[str, Any], *, model: str
+) -> None:
+    """Fail the turn without losing what Codex did.
+
+    Used when the graph cannot be resumed safely: attempts exhausted, or the
+    checkpoint already moved past the handoff interrupt.
+    """
+    from src.core.database import AsyncSessionLocal
+    from src.services.agent import agent_execution_service
+
+    reply = outcome.get("reply") or "(Codex sent no reply.)"
+    assistant_id = await agent_execution_service._persist_assistant_message_safe(
+        thread_id=str(claim.thread_id),
+        content=(
+            "NOUS could not finish this turn after Codex ended "
+            f"({outcome.get('status', 'unknown')}). Codex's reply:\n\n{reply}"
+        ),
+        model_name=model,
+        tool_executions_out=None,
+        client_message_id=_assistant_client_message_id(claim),
+        required=True,
+    )
+    async with AsyncSessionLocal() as db:
+        await finalize_submission(
+            db,
+            run_id=claim.parent_run_id,
+            status=JobStatus.FAILED,
+            organization_id=claim.organization_id,
+            event_type=RunEventType.RUN_FAILED,
+            payload={
+                "code": "handoff_resume_failed",
+                "message": "NOUS could not finish this turn.",
+                "assistant_message_id": assistant_id,
+            },
+            error_code="handoff_resume_failed",
+            error="NOUS could not finish this turn.",
+        )
 
 
 async def _parent_model(db: AsyncSession, run_id: str) -> str:
@@ -3705,12 +3884,7 @@ async def resume_handoff_parent(claim: HandoffResumeClaim, outcome: dict[str, An
             content=content or "Codex finished.",
             model_name=model,
             tool_executions_out=None,
-            client_message_id=str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    f"nous-assistant-handoff:{claim.parent_run_id}:{claim.child_run_id}",
-                )
-            ),
+            client_message_id=_assistant_client_message_id(claim),
             required=True,
         )
         await close(
@@ -3726,22 +3900,19 @@ async def resume_handoff_parent(claim: HandoffResumeClaim, outcome: dict[str, An
             event_type=RunEventType.RUN_CANCELLED,
             payload={"reason": "user_requested"},
         )
-    except Exception as exc:
-        # ApprovalExpired (checkpoint no longer matches the stored receipt),
-        # the 360 s timeout, and graph errors all close the turn as failed.
-        logger.exception("handoff resume failed", extra={"run_id": claim.parent_run_id})
-        message = (
-            str(exc) if isinstance(exc, ApprovalExpired)
-            else "NOUS could not finish this turn."
+    except Exception:
+        # ApprovalExpired (the checkpoint moved past the handoff interrupt, so
+        # a retry would not be safe), the 360 s timeout, and graph errors all
+        # close the turn as failed, keeping Codex's reply as the answer. A
+        # worker *crash* never reaches here: the next drain re-claims instead.
+        logger.exception(
+            "handoff resume failed",
+            extra={"run_id": claim.parent_run_id, "attempt": claim.attempt},
         )
-        await close(
-            JobStatus.FAILED,
-            event_type=RunEventType.RUN_FAILED,
-            payload={"code": "handoff_resume_failed", "message": message[:1000]},
-            error_code="handoff_resume_failed",
-            error=message[:1000],
-        )
+        await close_with_codex_reply(claim, outcome, model=model)
 ```
+
+`ApprovalExpired` is no longer named in the handler; drop it from the import if the linter flags it.
 
 `build_trace_metadata`'s keyword arguments must match its signature; check `trace_metadata.py` and drop any keyword it does not take. A nested park (another approval, or a second handoff) needs no frame. The browser learns about it through the cold resume probe (Task 3.9) when `useHandoffRun` (Task 5.4) sees the parent leave `running`.
 
@@ -3783,7 +3954,9 @@ Add `"drain-handoff-resumes",  # celery_app (handoff_tasks)` to `_EXPECTED_KEYS`
 
 **Step 3:** Run the new test file and `backend/tests/unit/tasks`. Expected: PASS.
 
-**Step 4: Mutation-verify** both predicates named in the docstring. Restore each one.
+**Step 4: Mutation-verify** the three checks named in the test docstring. Restore each one.
+
+Also confirm against the code that `AgentOutbox.dispatched_at` exists (`models/agent_outbox.py:73`) and that `AgentRun.updated_at` is the column `_run_heartbeat` touches (`agent_run_service.touch_run_updated_at`). On PostgreSQL, run the reclaim test in the Task 6.1 two-drain proof as well: `with_for_update(of=AgentOutbox, skip_locked=True)` over an outer join is not exercised by SQLite.
 
 **Step 5:** Commit:
 
@@ -4722,7 +4895,7 @@ Record the result as a dated evidence bundle under `docs/testing/evidence/` as `
 1. **Codex 0.153.4 item fields.** `ThreadItem` (`command`, `exitCode`, `changes[].path`) was confirmed only for 0.161.0, from a local `codex app-server generate-json-schema`. 0.153.4 is not installed here, and the repo vendors no `ThreadItem` schema. The bridge reads each field defensively. Should 0.153.4 stay supported, or should the pin drop it?
 2. **OpenAPI break level.** `JobStatusResponse.status` gains `delegated` (Task 1.7). It is unclear whether the `oasdiff` gate rates a response enum widening as ERR (label needed) or WARN. I did not run `oasdiff`.
 3. **Device presence.** No online signal exists, so the default target is the last used folder for the project (Deviation 6). Is that acceptable, or should a heartbeat column be added to `bridge_devices` (a schema change not in the design)?
-4. **Worker crash after a resume claim.** The parent stays `running` and is then swept `failed` after `AGENT_RUN_STALE_AFTER_SECONDS`. This keeps the never-re-run policy, but it loses the outcome. Should the drain re-claim a `dispatched` row whose parent has gone stale?
+4. **Worker crash after a resume claim. Resolved (owner, 2026-10-28):** the drain re-claims a `dispatched` row once its parent has missed heartbeats for `RECLAIM_AFTER_SECONDS` (300 s). It allows up to `MAX_RESUME_ATTEMPTS` (3); when those run out, or when the checkpoint has already moved past the handoff, the turn closes as failed with Codex's reply saved as the answer (Task 3.10). Remaining risk: a resume worker that is alive but has stopped heartbeating for 5 minutes could run in parallel with a retry. The heartbeat wraps the graph call, so this needs a hung event loop.
 5. **Command text privacy.** The command text goes through `redact_pii` / `redact_tool_args`, which do not strip absolute paths (user names) inside commands. Paths in `paths` are made relative. Is the residual exposure acceptable? It is the user's own tenant-scoped data.
 6. **assistant-ui `respondToApproval`.** I did not verify whether it passes extra fields through `onRespondToToolApproval` (`packages/chat-runtime/runtime.ts:146` types only `{approved, approvalId}`). The plan uses a draft map instead (Deviation 15).
 7. **`ProducerEvent` payload typing.** I was told that `schemas/harness.py:108-124` uses a typed payload, but I did not confirm that it resolves through `PAYLOAD_MODELS`. Task 4.1 checks this before relying on it.
