@@ -1997,10 +1997,25 @@ Check that `Any` is imported in `state.py`.
 
 **Step 3:** Rerun the registry tests and `backend/tests/unit/services/agent/test_tool_wrapper_contracts.py`. Expected: PASS. The metadata-hash snapshot test may need its literal re-recorded; say so in the PR.
 
+**Step 3b: Feature flag (owner decision, 2026-10-28).** PR 3 must not make the tool reachable before PR 5 ships the card it needs. Add a setting next to the other agent flags in `backend/src/core/config.py`:
+
+```python
+    # Machine handoff (docs/plans/2026-10-28-machine-handoff-design.md). Off
+    # until the frontend card ships (PR 5); turn on per environment.
+    MACHINE_HANDOFF_ENABLED: bool = False
+```
+
+While it is off:
+
+- `run_on_machine` is not bound to the model at all. Find where the general path and the research subgraph turn descriptors into bound tools (`descriptors_for_intent` / `descriptors_for_subgraph` callers, e.g. `llm_node` and `subgraphs/_factory.py`), and filter `run_on_machine` out there, in one shared helper.
+- Every place that sets `configurable.handoff_enabled = True` (stream producers, resume drain) sets it to `get_settings().MACHINE_HANDOFF_ENABLED` instead.
+
+Failing test first, in `test_agent_tool_registry.py` or next to the binding helper. With the flag patched off, the bound tool names for general and research exclude `run_on_machine`; with it on, they include it. The registry test above still sees the descriptor; it checks the registry, not the binding. Deploy values keep the flag off until PR 5 merges; turning it on in dev is a separate values change.
+
 **Step 4:** Commit:
 
 ```bash
-git add backend/src/services/agent/tools.py backend/src/services/agent/tools_impl.py backend/src/services/agent/state.py backend/tests/unit/services/test_agent_tool_registry.py
+git add backend/src/core/config.py backend/src/services/agent/tools.py backend/src/services/agent/tools_impl.py backend/src/services/agent/state.py backend/tests/unit/services/test_agent_tool_registry.py
 git commit -m "feat(agent): run_on_machine tool schema and descriptor
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
