@@ -152,6 +152,12 @@ backend:
       value: "true"
     - name: GUNICORN_WORKERS
       value: "1"
+    # No worker recycling. With one worker, a recycle (--max-requests, about
+    # every 25 min at dev's probe traffic) waits for open WebSockets and SSE
+    # streams with no deadline and no replacement worker, until the liveness
+    # probe kills the pod (~2 min outage; dev, 2026-10-28).
+    - name: GUNICORN_MAX_REQUESTS
+      value: "0"
     - name: ALLOW_MEMORY_FALLBACK
       value: "false"
     - name: RECONCILER_APPLY
