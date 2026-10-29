@@ -16094,13 +16094,14 @@
         "type": "object"
       },
       "JobStatus": {
-        "description": "Agent job lifecycle status — the wire contract for ``GET /agent/jobs/{id}``.\n\nSingle source of truth for every job-store status write (audit finding C7:\nthe backend previously wrote six untyped strings while the frontend typed\nfour). Members ARE the wire strings (``StrEnum``), so they JSON-serialize\nand compare against raw Redis records transparently.\n\nThe historical ``failed``/``error`` split is collapsed: writers always\nwrite ``FAILED``; ``\"error\"`` is accepted as an inbound alias when reading\nrecords written by pre-collapse code (one-release transition, see\n``_missing_``).\n\n``QUEUED`` (run created, worker not started) and ``STOPPING`` (cancel\nrequested, not yet acknowledged) belong to the durable run lifecycle:\nqueued → running ⇄ awaiting_confirmation → completed|failed|cancelled,\nwith stopping as a visible transient before cancelled. Both are\nnon-terminal; terminal states are absorbing.",
+        "description": "Agent job lifecycle status — the wire contract for ``GET /agent/jobs/{id}``.\n\nSingle source of truth for every job-store status write (audit finding C7:\nthe backend previously wrote six untyped strings while the frontend typed\nfour). Members ARE the wire strings (``StrEnum``), so they JSON-serialize\nand compare against raw Redis records transparently.\n\nThe historical ``failed``/``error`` split is collapsed: writers always\nwrite ``FAILED``; ``\"error\"`` is accepted as an inbound alias when reading\nrecords written by pre-collapse code (one-release transition, see\n``_missing_``).\n\n``QUEUED`` (run created, worker not started) and ``STOPPING`` (cancel\nrequested, not yet acknowledged) belong to the durable run lifecycle:\nqueued → running ⇄ awaiting_confirmation → completed|failed|cancelled,\nwith stopping as a visible transient before cancelled. Both are\nnon-terminal; terminal states are absorbing.\n\n``DELEGATED`` is a third non-terminal pause: the graph waits on a child\nCodex run (``agent_runs.parent_run_id``) and resumes when it ends.",
         "enum": [
           "queued",
           "running",
           "awaiting_confirmation",
           "stopping",
           "recovering",
+          "delegated",
           "completed",
           "failed",
           "cancelled"
