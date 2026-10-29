@@ -30,6 +30,9 @@ class JobStatus(StrEnum):
     queued → running ⇄ awaiting_confirmation → completed|failed|cancelled,
     with stopping as a visible transient before cancelled. Both are
     non-terminal; terminal states are absorbing.
+
+    ``DELEGATED`` is a third non-terminal pause: the graph waits on a child
+    Codex run (``agent_runs.parent_run_id``) and resumes when it ends.
     """
 
     QUEUED = "queued"
@@ -37,6 +40,9 @@ class JobStatus(StrEnum):
     AWAITING_CONFIRMATION = "awaiting_confirmation"
     STOPPING = "stopping"
     RECOVERING = "recovering"
+    # A NOUS run paused on a child Codex run (machine handoff). Active: it
+    # holds the thread's single-writer slot until the graph resumes.
+    DELEGATED = "delegated"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

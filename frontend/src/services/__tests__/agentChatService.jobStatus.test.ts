@@ -36,6 +36,7 @@ const TRUTH_TABLE = {
   running: false,
   awaiting_confirmation: false,
   stopping: false,
+  delegated: false,
   completed: true,
   failed: true,
   error: true, // legacy alias for 'failed' — one-release transition
@@ -58,6 +59,7 @@ describe('isTerminalJobStatus', () => {
         'running',
         'awaiting_confirmation',
         'stopping',
+        'delegated',
         'completed',
         'failed',
         'error',
