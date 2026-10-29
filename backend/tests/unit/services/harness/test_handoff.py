@@ -44,7 +44,14 @@ otherwise mask a missing org or nested-parent guard:
   ``assistant_message_id`` back in a child's payload is an equivalent mutant
   (validate_payload drops the None value);
 * removing ``not run.parent_run_id`` in prompt_context.build_harness_prompt
-  fails test_prompt_context.test_a_brief_without_a_parent_run_is_refused.
+  fails test_prompt_context.test_a_brief_without_a_parent_run_is_refused;
+* agent_submission_service.write_handoff_resume: replacing ``if parent_run_id
+  is None`` with ``if False`` fails
+  test_top_level_codex_runs_write_no_resume_record; calling it above
+  finalize_submission's ``if transitioned is None`` return fails
+  test_two_terminal_deliveries_write_one_resume_record with IntegrityError;
+  dropping the call from finalize_submission fails it and
+  test_cancelling_a_queued_child_writes_its_resume_record.
 """
 
 from __future__ import annotations
@@ -72,7 +79,13 @@ from src.models.thread import Thread
 from src.models.workspace import Workspace
 from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
-from src.services.agent.agent_submission_service import accept_submission
+from src.services.agent.agent_submission_service import (
+    HANDOFF_RESUME_KIND,
+    accept_submission,
+    finalize_submission,
+    request_run_cancellation,
+)
+from src.services.agent.run_event_types import RunEventType
 from src.services.agent.schemas import AgentExecuteRequest, AgentMessage
 from src.services.harness import handoff as handoff_service
 from src.services.harness.delivery import (
@@ -836,3 +849,70 @@ async def test_a_top_level_codex_run_still_writes_its_assistant_row(
     assert run is not None and run.status == JobStatus.COMPLETED.value
     assert "handoff_reply" not in (run.run_metadata or {})
     assert await assistant_rows(db, accepted.run_id) == 1
+
+
+async def resume_rows(db: AsyncSession, child_id: str) -> list[dict]:
+    return list(
+        (
+            await db.scalars(
+                select(AgentOutbox.payload).where(
+                    AgentOutbox.run_id == child_id,
+                    AgentOutbox.kind == HANDOFF_RESUME_KIND,
+                )
+            )
+        ).all()
+    )
+
+
+async def test_two_terminal_deliveries_write_one_resume_record(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    parent = await parent_run(db)
+    child_id = await handoff(db, parent)
+    for _ in range(2):
+        await finalize_submission(
+            db,
+            run_id=child_id,
+            status=JobStatus.FAILED,
+            organization_id=ORG,
+            event_type=RunEventType.RUN_FAILED,
+            payload={"code": "harness_failed", "message": "usage limit"},
+            provider="codex",
+        )
+    assert await resume_rows(db, child_id) == [{"parent_run_id": parent}]
+
+
+async def test_cancelling_a_queued_child_writes_its_resume_record(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    parent = await parent_run(db)
+    child_id = await handoff(db, parent)
+    result = await request_run_cancellation(
+        db,
+        run_id=child_id,
+        thread_id=THREAD,
+        organization_id=ORG,
+        user_id=USER,
+        reason="user_requested",
+    )
+    await db.commit()
+    assert result is not None and result.status is JobStatus.CANCELLED
+    assert await resume_rows(db, child_id) == [{"parent_run_id": parent}]
+
+
+async def test_top_level_codex_runs_write_no_resume_record(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    from tests.unit.services.harness.test_runs import accept
+
+    accepted = await accept(db, context)
+    await finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.COMPLETED,
+        organization_id=ORG,
+        event_type=RunEventType.RUN_COMPLETED,
+        payload={},
+        provider="codex",
+    )
+    assert await resume_rows(db, accepted.run_id) == []

@@ -110,6 +110,11 @@ logger = logging.getLogger(__name__)
 # backend must be addable without a migration.
 DISPATCH_KIND_STREAM = "agent.stream.execute"
 
+# A finished machine-handoff child's promise to resume its parent's graph.
+# Keyed by the CHILD run id (uq_agent_outbox_run_kind) so one parent can hand
+# off more than once; claimed exactly once by the resume drain.
+HANDOFF_RESUME_KIND = "handoff.resume"
+
 # Prefix keeps /stream and /execute idempotency namespaces disjoint: the same
 # client_message_id sent to both endpoints is two different submissions.
 _IDEMPOTENCY_PREFIX = "agent-stream"
@@ -819,6 +824,32 @@ async def insert_outbox(
     )
 
 
+async def write_handoff_resume(
+    db: AsyncSession, *, run_id: str, organization_id: Any
+) -> Optional[AgentOutbox]:
+    """Leave the resume record for *run_id*'s parent, if it is a handoff child.
+
+    Does NOT commit: call it in the transaction that moved the run to a
+    terminal status, after the guarded UPDATE that won that transition, so
+    the record is written exactly once (``uq_agent_outbox_run_kind`` turns a
+    second write into an IntegrityError). Top-level runs get nothing.
+    """
+    parent_run_id = (
+        await db.execute(
+            select(AgentRun.parent_run_id).where(AgentRun.job_id == run_id)
+        )
+    ).scalar_one_or_none()
+    if parent_run_id is None:
+        return None
+    return await _insert_outbox(
+        db,
+        run_id=run_id,
+        organization_id=organization_id,
+        kind=HANDOFF_RESUME_KIND,
+        payload={"parent_run_id": str(parent_run_id)},
+    )
+
+
 async def accept_submission(
     db: AsyncSession,
     *,
@@ -1386,6 +1417,12 @@ async def finalize_submission(
                     .where(HarnessSession.run_id == run_id)
                     .values(workspace_locked=False)
                 )
+                # Same transaction as the terminal transition: a finished child
+                # always leaves a resume record for its parent, exactly once
+                # (the guarded UPDATE above wins only once).
+                await write_handoff_resume(
+                    db, run_id=run_id, organization_id=organization_id
+                )
             if commit:
                 await db.commit()
             return True
@@ -1420,6 +1457,7 @@ async def finalize_submission(
 
 __all__ = [
     "DISPATCH_KIND_STREAM",
+    "HANDOFF_RESUME_KIND",
     "AcceptedSubmission",
     "RunCancellationResult",
     "accept_submission",
@@ -1429,4 +1467,5 @@ __all__ = [
     "mark_submission_dispatched",
     "request_run_cancellation",
     "stream_idempotency_key",
+    "write_handoff_resume",
 ]
