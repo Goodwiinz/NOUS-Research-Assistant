@@ -959,6 +959,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ## PR 2: Child run creation
 
+> **Amendments from the PR 1 final review (2026-10-29).** Fold these into the tasks below.
+>
+> 1. **A child the sweeper ends must still resume its parent** (Task 2.6). `terminalize_stale_run` (`agent_run_service.py` ~613) does not go through `finalize_submission`, so a child the stale-run sweeper fails would never get its `handoff.resume` row. Its parent is `delegated`, is excluded from `list_stale_runs` (PR 1), and has no timeout, so it would wait forever, and every later message would get the "Codex is still working" notice. Write the resume row from the sweeper's terminal path too: extract the row write into one helper that both `finalize_submission` and `terminalize_stale_run` call in their own transactions. Add a test: sweep a stale child, then assert one pending `handoff.resume` row naming the parent. Mutation-verify it.
+> 2. **Outbox reads that assumed one row per run** must also filter on `kind` before any run can hold a second row: `agent_submission_service.py` ~221 (`_existing_outbox_id`, `limit(1)` with no ORDER BY, so it could return the resume row), ~721, `agent_run_service.py` ~660, `harness/runs.py` ~211. Filter each on its own kind (the dispatch kinds, or `harness.execute`). Add a test per site that seeds a second-kind row.
+> 3. **PR 1 removed the `_clear_stale_pending_confirmation` handoff guard on purpose.** A new turn on a delegated thread is refused earlier (`HandoffInProgress`), so by the time the cleanup runs, a handoff interrupt is always a dead one: the parent ended without resuming it, for example through `close_with_codex_reply`. Clearing it is correct. Do not re-add the guard.
+
 ### Task 2.1: Move chat-run grant minting into the service layer
 
 **Files:**
@@ -3148,6 +3154,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ### Task 3.8: Stop and Cancel on a delegated parent cancel the child
+
+> **Amendment (2026-10-29, PR 1 final review):** since PR 1, `_PRE_STOP_RUN_STATUSES` (`agent_run_service.py` ~53) is derived from the active statuses, so it includes `delegated`. Stop could therefore move a delegated parent to `stopping`, which contradicts deviation 12 (Stop cancels only the child). This task must exclude `delegated` from that set explicitly, or route a delegated parent to the child-cancel path before the generic transition. Add a test that Stop on a delegated parent leaves it `delegated` and requests cancellation of the child.
 
 **Files:**
 - Modify: `backend/src/services/agent/agent_submission_service.py`. Add `request_handoff_cancellation` after `request_run_cancellation` (`:538-639`).
