@@ -9,26 +9,41 @@ narrows ``uq_agent_runs_active_thread`` to top-level runs and adds
 ``'delegated'`` to it, and replaces ``uq_agent_outbox_run (run_id)`` with
 ``uq_agent_outbox_run_kind (run_id, kind)``.
 
-Locking follows pb01: the column, the NOT VALID foreign key and the NOT VALID
-check are catalog-only and commit with the migration transaction (ACCESS
-EXCLUSIVE on ``agent_runs`` for that short transaction, no ``lock_timeout``, as
-in rp01). ``autocommit_block`` then validates each constraint as its own
-statement (SHARE UPDATE EXCLUSIVE) and builds each index CONCURRENTLY. The
-active-thread index is replaced by building ``uq_agent_runs_active_thread_new``
-CONCURRENTLY and then, in one statement, dropping the old index and renaming the
-new one. That statement takes ACCESS EXCLUSIVE but only touches the catalog, and
-the slot is never unenforced. The final name stays
-``uq_agent_runs_active_thread``, which agent_run_service._is_active_thread_conflict
-matches. An interrupted concurrent build leaves an INVALID index behind, which
-``IF NOT EXISTS`` would accept; each one is dropped first iff it is INVALID, so
-re-running the upgrade repairs it.
+Locking. Three kinds of step take ACCESS EXCLUSIVE on ``agent_runs``. That
+lock blocks every read and write of the table while it is held, and also while
+it is waited for, because later requests queue behind the waiter:
 
-The downgrade refuses while handoff state exists: a child run, a delegated run,
-or a run with more than one outbox row. The narrower slot and the one-row
-outbox key cannot hold that state.
+- the opening catalog step in the migration transaction: ADD COLUMN, the FK and
+  the replaced CHECK, both ``NOT VALID`` (no table scan);
+- the active-thread swap: ``uq_agent_runs_active_thread_new`` is built
+  CONCURRENTLY, then one statement drops the old index and renames the new one,
+  so the slot is never unenforced and keeps the name
+  agent_run_service._is_active_thread_conflict matches;
+- dropping an INVALID index left by an interrupted concurrent build (which
+  ``IF NOT EXISTS`` would otherwise accept), so a re-run repairs it.
+
+Each of those runs in a PL/pgSQL block under ``lock_timeout = 5s``
+(``set_config`` local to its transaction). On lock_not_available (55P03) the
+block's subtransaction rolls back, sleeps 1, 2, 3 then 4 s and retries, up to 5
+attempts; after the last it raises 55P03 saying the step changed nothing and the
+migration can be re-run. The opening step retries in place inside alembic's own
+transaction. Once granted, the lock is held only for catalog work. No other step
+blocks reads or writes: constraints are VALIDATEd (SHARE UPDATE EXCLUSIVE) and
+indexes built and dropped CONCURRENTLY in ``autocommit_block``, with no
+lock_timeout. A re-run that finds the active-thread index already in its target
+shape skips the rebuild.
+
+The downgrade is for code that has been rolled back: scale every handoff writer
+(API, workers and beat on the mh01 code) to zero first. It refuses while handoff
+state exists (a child run, a delegated run, or a run with more than one outbox
+row), because the narrower slot and the one-row outbox key cannot hold it. That
+check is not atomic with the index rebuilds that follow it.
 """
 
+from typing import Optional
+
 import alembic.op as op
+from sqlalchemy import text
 
 revision = "mh01_machine_handoff"
 down_revision = "pb01_pdf_message_branches"
@@ -50,52 +65,99 @@ _ACTIVE_PREDICATE = (
     "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering', "
     "'delegated')"
 )
+_ACTIVE_INDEX = "uq_agent_runs_active_thread"
+
+# ACCESS EXCLUSIVE steps: wait at most _LOCK_TIMEOUT per attempt, sleep
+# attempt * _LOCK_BACKOFF_S seconds between attempts. Read at call time, so the
+# PostgreSQL test can shorten them.
+_LOCK_TIMEOUT = "5s"
+_LOCK_ATTEMPTS = 5
+_LOCK_BACKOFF_S = 1.0
+
+
+def _exclusive(body: str) -> str:
+    """PL/pgSQL statements running ``body`` under lock_timeout, retried on 55P03.
+
+    Each attempt is a BEGIN/EXCEPTION subtransaction, so a timed-out attempt
+    rolls back alone, even inside alembic's migration transaction.
+    """
+    return f"""
+        PERFORM set_config('lock_timeout', '{_LOCK_TIMEOUT}', true);
+        FOR attempt IN 1..{_LOCK_ATTEMPTS} LOOP
+            BEGIN
+                {body}
+                EXIT;
+            EXCEPTION WHEN lock_not_available THEN
+                IF attempt = {_LOCK_ATTEMPTS} THEN
+                    RAISE EXCEPTION USING
+                        ERRCODE = 'lock_not_available',
+                        MESSAGE = format(
+                            'mh01_machine_handoff: agent_runs stayed locked '
+                            'through %s attempts of lock_timeout %s; this step '
+                            'changed nothing, re-run the migration',
+                            attempt, '{_LOCK_TIMEOUT}');
+                END IF;
+                PERFORM pg_sleep(attempt * {_LOCK_BACKOFF_S});
+            END;
+        END LOOP;"""
 
 
 def _drop_index_if_invalid(name: str) -> None:
     # Static identifiers only. Never touches a valid index.
+    drop = _exclusive(f"EXECUTE 'DROP INDEX ' || to_regclass('{name}')::text;")
     op.execute(f"""DO $$ BEGIN
         IF EXISTS (
             SELECT 1 FROM pg_index
             WHERE indexrelid = to_regclass('{name}') AND NOT indisvalid
-        ) THEN
-            EXECUTE 'DROP INDEX ' || to_regclass('{name}')::text;
+        ) THEN {drop}
         END IF;
         END $$""")
 
 
+def _active_index_def() -> Optional[str]:
+    """``uq_agent_runs_active_thread``'s definition; None offline or if absent."""
+    if op.get_context().as_sql:
+        return None
+    return op.get_bind().scalar(
+        text(f"SELECT pg_get_indexdef(to_regclass('{_ACTIVE_INDEX}'))")
+    )
+
+
 def _swap_active_thread_index(predicate: str) -> None:
     """Rebuild ``uq_agent_runs_active_thread`` with ``predicate``. Autocommit."""
-    name = "uq_agent_runs_active_thread"
-    new = f"{name}_new"
+    new = f"{_ACTIVE_INDEX}_new"
     _drop_index_if_invalid(new)
     op.execute(
         f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {new} "
         f"ON agent_runs (thread_id) WHERE {predicate}"
     )
-    # One statement: the slot always has exactly one enforcing index.
+    # One statement: the slot always has exactly one enforcing index, and only
+    # a valid build is promoted.
+    swap = _exclusive(
+        f"DROP INDEX IF EXISTS {_ACTIVE_INDEX}; "
+        f"ALTER INDEX {new} RENAME TO {_ACTIVE_INDEX};"
+    )
     op.execute(f"""DO $$ BEGIN
-        IF to_regclass('{new}') IS NOT NULL THEN
-            EXECUTE 'DROP INDEX IF EXISTS {name}';
-            EXECUTE 'ALTER INDEX {new} RENAME TO {name}';
+        IF EXISTS (
+            SELECT 1 FROM pg_index
+            WHERE indexrelid = to_regclass('{new}') AND indisvalid
+        ) THEN {swap}
         END IF;
         END $$""")
 
 
-def _status_check(statuses: str) -> None:
-    op.execute("ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS ck_agent_runs_status")
-    op.execute(
+def _status_check(statuses: str) -> str:
+    return (
+        "ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS ck_agent_runs_status; "
         "ALTER TABLE agent_runs ADD CONSTRAINT ck_agent_runs_status "
-        f"CHECK (status IN ({statuses})) NOT VALID"
+        f"CHECK (status IN ({statuses})) NOT VALID;"
     )
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(36)"
-    )
     # The model names the FK the same, so a create_all schema is left alone.
-    op.execute("""DO $$ BEGIN
+    opening = _exclusive(f"""
+        ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(36);
         IF NOT EXISTS (
             SELECT 1 FROM pg_constraint
             WHERE conname = 'fk_agent_runs_parent_run_id'
@@ -105,8 +167,8 @@ def upgrade() -> None:
             FOREIGN KEY (parent_run_id) REFERENCES agent_runs(job_id)
             ON DELETE SET NULL NOT VALID;
         END IF;
-        END $$""")
-    _status_check(_STATUSES + ", 'delegated'")
+        {_status_check(_STATUSES + ", 'delegated'")}""")
+    op.execute(f"DO $$ BEGIN {opening} END $$")
     # Commits the ACCESS EXCLUSIVE catalog transaction above; every statement
     # below runs and commits on its own.
     with op.get_context().autocommit_block():
@@ -119,7 +181,8 @@ def upgrade() -> None:
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agent_runs_parent "
             "ON agent_runs (parent_run_id)"
         )
-        _swap_active_thread_index(_ACTIVE_PREDICATE)
+        if "parent_run_id IS NULL" not in (_active_index_def() or ""):
+            _swap_active_thread_index(_ACTIVE_PREDICATE)
         _drop_index_if_invalid("uq_agent_outbox_run_kind")
         op.execute(
             "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_agent_outbox_run_kind "
@@ -155,13 +218,15 @@ def downgrade() -> None:
             "ON agent_outbox (run_id)"
         )
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS uq_agent_outbox_run_kind")
-        _swap_active_thread_index(_LEGACY_ACTIVE_PREDICATE)
+        index = _active_index_def()
+        if index is None or "parent_run_id" in index:
+            _swap_active_thread_index(_LEGACY_ACTIVE_PREDICATE)
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_agent_runs_parent")
     # Catalog-only again; the check is validated after this commits.
-    _status_check(_STATUSES)
-    op.execute(
-        "ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS fk_agent_runs_parent_run_id"
-    )
-    op.execute("ALTER TABLE agent_runs DROP COLUMN IF EXISTS parent_run_id")
+    closing = _exclusive(f"""
+        {_status_check(_STATUSES)}
+        ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS fk_agent_runs_parent_run_id;
+        ALTER TABLE agent_runs DROP COLUMN IF EXISTS parent_run_id;""")
+    op.execute(f"DO $$ BEGIN {closing} END $$")
     with op.get_context().autocommit_block():
         op.execute("ALTER TABLE agent_runs VALIDATE CONSTRAINT ck_agent_runs_status")

@@ -47,4 +47,8 @@ def test_parent_fk_name_matches_the_model() -> None:
     (fk,) = AgentRun.__table__.c.parent_run_id.foreign_keys
     assert fk.name == "fk_agent_runs_parent_run_id"
     assert fk.ondelete == "SET NULL"
-    assert "fk_agent_runs_parent_run_id" in _PATH.read_text("utf-8")
+    assert re.search(
+        r"ADD CONSTRAINT fk_agent_runs_parent_run_id\s+FOREIGN KEY \(parent_run_id\)"
+        r"\s+REFERENCES agent_runs\(job_id\)\s+ON DELETE SET NULL",
+        _PATH.read_text("utf-8"),
+    )

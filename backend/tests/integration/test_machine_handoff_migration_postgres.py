@@ -5,16 +5,23 @@ Mutation checks: dropping ``parent_run_id IS NULL`` from the predicate fails
 test_child_and_parent_share_a_thread; leaving 'delegated' out of the CHECK
 fails it too (CheckViolation); skipping _drop_index_if_invalid in the swap
 fails test_upgrade_repairs_an_interrupted_build; dropping the downgrade's
-several-outbox-rows guard fails test_downgrade_refuses_a_second_outbox_row.
+several-outbox-rows guard fails test_downgrade_refuses_a_second_outbox_row,
+and its delegated guard fails test_downgrade_refuses_a_delegated_run;
+deleting either VALIDATE fails test_child_and_parent_share_a_thread.
+
+The lock tests hold ACCESS SHARE on agent_runs from a second connection and
+shorten the lock_timeout/backoff so the retry loop finishes in about a second.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 from uuid import uuid4
 
 import pytest
@@ -69,7 +76,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
             await conn.execute(
                 text(
                     "CREATE TABLE agent_outbox (id UUID PRIMARY KEY, run_id VARCHAR(36) "
-                    "NOT NULL REFERENCES agent_runs(job_id), kind VARCHAR(64) NOT NULL)"
+                    "NOT NULL, kind VARCHAR(64) NOT NULL)"
                 )
             )
             await conn.execute(
@@ -91,8 +98,17 @@ def _migration() -> Any:
     return module
 
 
-async def _run(engine: AsyncEngine, direction: str) -> list[str]:
+# Fast lock settings for the lock tests: ~1 s for all five attempts.
+_FAST_LOCKS = {"_LOCK_TIMEOUT": "100ms", "_LOCK_BACKOFF_S": 0.05}
+
+
+async def _run(
+    engine: AsyncEngine, step: Union[str, Callable[[Any], None]], **overrides: Any
+) -> list[str]:
     migration, executed = _migration(), []
+    for name, value in overrides.items():
+        assert hasattr(migration, name), name
+        setattr(migration, name, value)
 
     def record(_c: Any, _cur: Any, statement: str, *_a: Any) -> None:
         executed.append(" ".join(statement.split()))
@@ -100,7 +116,10 @@ async def _run(engine: AsyncEngine, direction: str) -> list[str]:
     def migrate(connection: Any) -> None:
         context = MigrationContext.configure(connection)
         with Operations.context(context), context.begin_transaction():
-            getattr(migration, direction)()
+            if isinstance(step, str):
+                getattr(migration, step)()
+            else:
+                step(migration)
 
     event.listen(engine.sync_engine, "before_cursor_execute", record)
     try:
@@ -133,10 +152,34 @@ async def _index_def(engine: AsyncEngine, name: str) -> str:
         )
 
 
+async def _validated(engine: AsyncEngine) -> dict[str, bool]:
+    async with engine.connect() as db:
+        rows = await db.execute(
+            text(
+                "SELECT conname, convalidated FROM pg_constraint "
+                "WHERE conrelid = 'agent_runs'::regclass"
+            )
+        )
+        return {name: valid for name, valid in rows}
+
+
+def _swap(predicate: str) -> Callable[[Any], None]:
+    def step(migration: Any) -> None:
+        with migration.op.get_context().autocommit_block():
+            migration._swap_active_thread_index(getattr(migration, predicate))
+
+    return step
+
+
 async def test_child_and_parent_share_a_thread(engine: AsyncEngine) -> None:
     first = await _run(engine, "upgrade")
-    await _run(engine, "upgrade")  # idempotent re-run
+    second = await _run(engine, "upgrade")  # idempotent re-run
     assert sum("CREATE UNIQUE INDEX CONCURRENTLY" in s for s in first) == 2
+    # The re-run finds the slot index already narrowed and does not rebuild it.
+    assert not any("uq_agent_runs_active_thread_new" in s for s in second)
+    validated = await _validated(engine)
+    assert validated["fk_agent_runs_parent_run_id"] is True
+    assert validated["ck_agent_runs_status"] is True
     indexes = await _index_validity(engine)
     assert all(indexes[name] for name in _INDEXES)
     assert "uq_agent_outbox_run" not in indexes
@@ -331,3 +374,77 @@ async def test_downgrade_restores_the_pre_mh01_schema(engine: AsyncEngine) -> No
     await _run(engine, "upgrade")  # round trip
     indexes = await _index_validity(engine)
     assert all(indexes[name] for name in _INDEXES)
+
+
+async def test_downgrade_refuses_a_delegated_run(engine: AsyncEngine) -> None:
+    await _run(engine, "upgrade")
+    run = str(uuid4())
+    async with engine.begin() as db:
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,NULL,'delegated',NULL)"),
+            {"j": run},
+        )
+        await db.execute(
+            text("INSERT INTO agent_outbox VALUES (:i,:r,'agent.stream.execute')"),
+            {"i": uuid4(), "r": run},
+        )
+    with pytest.raises(Exception, match="handoff"):
+        await _run(engine, "downgrade")
+    assert "uq_agent_outbox_run" not in await _index_validity(engine)
+
+
+async def test_opening_step_times_out_cleanly_under_a_held_lock(
+    engine: AsyncEngine,
+) -> None:
+    async with engine.connect() as locker:
+        await locker.execute(text("LOCK TABLE agent_runs IN ACCESS SHARE MODE"))
+        started = time.monotonic()
+        with pytest.raises(DBAPIError, match="re-run the migration") as caught:
+            await asyncio.wait_for(_run(engine, "upgrade", **_FAST_LOCKS), 30)
+        elapsed = time.monotonic() - started
+        await locker.rollback()
+    assert getattr(caught.value.orig, "pgcode", None) == "55P03"
+    assert elapsed >= 0.5  # five 100 ms waits: it retried
+    async with engine.connect() as db:
+        added = await db.scalar(
+            text(
+                "SELECT count(*) FROM information_schema.columns WHERE "
+                "table_schema = current_schema() AND table_name = 'agent_runs' "
+                "AND column_name = 'parent_run_id'"
+            )
+        )
+    assert added == 0
+
+
+async def test_swap_times_out_and_retries_instead_of_hanging(
+    engine: AsyncEngine,
+) -> None:
+    await _run(engine, "upgrade")
+    swap = _swap("_LEGACY_ACTIVE_PREDICATE")
+    async with engine.connect() as locker:
+        await locker.execute(text("LOCK TABLE agent_runs IN ACCESS SHARE MODE"))
+        started = time.monotonic()
+        with pytest.raises(DBAPIError, match="re-run the migration") as caught:
+            await asyncio.wait_for(_run(engine, swap, **_FAST_LOCKS), 30)
+        elapsed = time.monotonic() - started
+        await locker.rollback()
+    assert getattr(caught.value.orig, "pgcode", None) == "55P03"
+    assert elapsed >= 0.5
+    # Nothing was swapped: the slot index is unchanged and the build waits.
+    assert "parent_run_id IS NULL" in await _index_def(
+        engine, "uq_agent_runs_active_thread"
+    )
+    assert (await _index_validity(engine))["uq_agent_runs_active_thread_new"]
+
+    # A lock released mid-retry lets a later attempt swap.
+    async with engine.connect() as locker:
+        await locker.execute(text("LOCK TABLE agent_runs IN ACCESS SHARE MODE"))
+        task = asyncio.ensure_future(_run(engine, swap, **_FAST_LOCKS))
+        await asyncio.sleep(0.25)
+        assert not task.done()
+        await locker.rollback()
+        await asyncio.wait_for(task, 30)
+    assert "parent_run_id" not in await _index_def(
+        engine, "uq_agent_runs_active_thread"
+    )
+    assert "uq_agent_runs_active_thread_new" not in await _index_validity(engine)
