@@ -43,7 +43,7 @@ _INDEXES = (
 
 @pytest.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
-    url = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    url = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
     if not url:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
     url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
