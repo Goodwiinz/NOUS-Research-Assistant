@@ -17,14 +17,11 @@ from src.services.agent.run_event_store import read_events
 from src.services.agent.run_event_types import TERMINAL_RUN_EVENTS, RunEventType
 
 # Compatibility: chat-run grant minting moved to the service layer so the
-# handoff service can mint without importing the API package. Tests patch
-# ``src.api.agent.harness_streaming.create_chat_context``; streaming.py's lazy
-# import reads this binding at call time, so those patches still apply.
-from src.services.harness.chat_context import (  # noqa: F401
-    _authorize_chat_run,
-    _run_consent_kind,
-    create_chat_context,
-)
+# handoff service can mint without importing the API package. streaming.py's
+# lazy import reads this binding at call time, and tests patch it here
+# (``src.api.agent.harness_streaming.create_chat_context``). The private
+# helpers are not re-exported: patch them on ``chat_context``.
+from src.services.harness.chat_context import create_chat_context  # noqa: F401
 from src.shared.enums import AgentStreamEvent
 
 _POLL_INTERVAL_SECONDS = 0.25

@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_outbox import HARNESS_EXECUTE_KIND
 from src.models.agent_run import AgentRun
 from src.services.agent.agent_run_service import (
     ActiveRunConflict,
@@ -205,7 +206,7 @@ async def create_handoff_run(
             db,
             run_id=child_id,
             organization_id=child.organization_id,
-            kind="harness.execute",
+            kind=HARNESS_EXECUTE_KIND,
             payload={
                 "execution_provider": "codex",
                 "thread_id": str(child.thread_id),

@@ -32,7 +32,8 @@ otherwise mask a missing org or nested-parent guard:
   test_an_unusable_tool_call_id_is_refused[empty] / [over-255];
 * making agent_run_service.integrity_constraint_name ignore ``__cause__``, or
   handoff ignore the driver name, fails
-  test_a_folder_lost_at_insert_is_a_workspace_conflict[postgres];
+  test_a_folder_lost_at_insert_is_a_workspace_conflict[postgres] and
+  test_a_concurrent_creator_wins_and_its_child_is_returned[postgres];
 * removing the status recheck after the mint fails
   test_a_parent_that_stopped_while_minting_is_refused;
 * delivery.project_terminal: forcing ``child = False``, writing the assistant
@@ -81,12 +82,10 @@ from src.schemas.integration_context import GrantRequestCreate, IntegrationConte
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.agent_submission_service import (
     HANDOFF_RESUME_KIND,
-    accept_submission,
     finalize_submission,
     request_run_cancellation,
 )
 from src.services.agent.run_event_types import RunEventType
-from src.services.agent.schemas import AgentExecuteRequest, AgentMessage
 from src.services.harness import handoff as handoff_service
 from src.services.harness.delivery import (
     HANDOFF_REPLY_CHARS,
@@ -108,6 +107,7 @@ from src.services.integrations.context import (
     exchange_request,
 )
 from src.shared.enums import JobStatus
+from tests.unit.services.harness.handoff_helpers import OWNER, parent_run
 from tests.unit.services.harness.test_delivery import (  # noqa: F401
     delivery_tables,
     event,
@@ -125,39 +125,12 @@ from tests.unit.services.harness.test_runs import (  # noqa: F401
 )
 
 pytestmark = pytest.mark.unit
-OWNER = SimpleNamespace(id=USER, organization_id=ORG)
 BRIEF = "Run the tests and fix the failures."
 
 
 @pytest.fixture(autouse=True)
 def bridge_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
-
-
-async def parent_run(
-    db: AsyncSession,
-    status: JobStatus = JobStatus.RUNNING,
-    thread_id: UUID = THREAD,
-) -> str:
-    """A NOUS chat run on ``thread_id``, moved to ``status``."""
-    accepted = await accept_submission(
-        db,
-        current_user=OWNER,
-        request=AgentExecuteRequest(
-            messages=[
-                AgentMessage(role="user", content="fix it", client_message_id=uuid4())
-            ],
-            thread_id=str(thread_id),
-        ),
-        thread=await db.get(Thread, thread_id),
-    )
-    await db.execute(
-        update(AgentRun)
-        .where(AgentRun.job_id == accepted.run_id)
-        .values(status=status.value)
-    )
-    await db.commit()
-    return accepted.run_id
 
 
 async def handoff(
@@ -566,14 +539,34 @@ async def test_another_users_device_and_folder_are_refused(
     assert await children(db, parent) == 0
 
 
+@pytest.mark.parametrize("driver", ["sqlite", "postgres"])
 async def test_a_concurrent_creator_wins_and_its_child_is_returned(
-    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    driver: str,
 ) -> None:
     """The lookup misses (the winner had not committed when this call read),
-    so the insert hits uq_agent_runs_handoff_call: return the winner."""
+    so the insert hits uq_agent_runs_handoff_call: return the winner.
+
+    ``postgres`` re-raises the real SQLite collision in asyncpg's shape (the
+    index name only on the ``__cause__`` driver error, a message that names
+    nothing), so the name path is what recognises it."""
     folder = await second_project_folder(db)
     parent = await parent_run(db)
     winner = await handoff(db, parent)
+    if driver == "postgres":
+        real_flush = db.flush
+
+        async def flush(*args: Any, **kwargs: Any) -> None:
+            try:
+                await real_flush(*args, **kwargs)
+            except IntegrityError as exc:
+                if "handoff_tool_call_id" not in str(exc.orig):
+                    raise
+                raise _integrity_error("x", constraint="uq_agent_runs_handoff_call")
+
+        monkeypatch.setattr(db, "flush", flush)
     lookups: list[str | None] = []
     real = handoff_service.existing_handoff_run
 

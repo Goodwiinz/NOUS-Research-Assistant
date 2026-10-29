@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -193,25 +194,51 @@ async def test_idempotent_retry_returns_existing_run(db: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
+_AT = datetime(2026, 10, 29, tzinfo=timezone.utc)
+
+
 @pytest.mark.parametrize("dispatch_kind", ["agent.stream.execute", "harness.execute"])
 async def test_existing_outbox_id_ignores_the_resume_row(
     db: AsyncSession, dispatch_kind: str
 ) -> None:
     """Mutation: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
-    ``_existing_outbox_id`` and this fails (MultipleResultsFound, or the
-    resume row's id returned as the dispatch record)."""
+    ``_existing_outbox_id`` and this fails (the resume row's id returned as
+    the dispatch record)."""
     run_id = str(uuid.uuid4())
     db.add(AgentRun(job_id=run_id, status=JobStatus.COMPLETED.value))
     await db.flush()
-    # The resume row goes in first, so an unfiltered read meets it first.
-    resume = AgentOutbox(run_id=run_id, kind=submission_mod.HANDOFF_RESUME_KIND)
-    db.add(resume)
-    await db.flush()
-    dispatch = AgentOutbox(run_id=run_id, kind=dispatch_kind)
-    db.add(dispatch)
+    # The resume row is the older one, so an unfiltered read returns it.
+    resume = AgentOutbox(
+        run_id=run_id, kind=submission_mod.HANDOFF_RESUME_KIND, created_at=_AT
+    )
+    dispatch = AgentOutbox(
+        run_id=run_id, kind=dispatch_kind, created_at=_AT + timedelta(seconds=1)
+    )
+    db.add_all([resume, dispatch])
     await db.commit()
 
     assert await submission_mod._existing_outbox_id(db, run_id) == str(dispatch.id)
+
+
+async def test_existing_outbox_id_is_the_first_dispatch_row_written(
+    db: AsyncSession,
+) -> None:
+    """Not a state the code writes today, but the answer must not depend on
+    scan order. Mutation: drop the ``order_by`` from ``_existing_outbox_id``
+    and this fails (the later row, which sorts first by kind, is returned)."""
+    run_id = str(uuid.uuid4())
+    db.add(AgentRun(job_id=run_id, status=JobStatus.COMPLETED.value))
+    await db.flush()
+    first = AgentOutbox(run_id=run_id, kind="harness.execute", created_at=_AT)
+    later = AgentOutbox(
+        run_id=run_id,
+        kind="agent.stream.execute",
+        created_at=_AT + timedelta(seconds=1),
+    )
+    db.add_all([later, first])
+    await db.commit()
+
+    assert await submission_mod._existing_outbox_id(db, run_id) == str(first.id)
 
 
 async def test_fail_queued_submission_leaves_a_resume_row_alone(

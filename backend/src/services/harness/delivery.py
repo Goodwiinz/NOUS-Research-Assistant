@@ -188,7 +188,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
             await db.scalars(
                 select(AgentOutbox.run_id)
                 .where(
-                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
                     AgentOutbox.status == "pending",
                 )
                 .order_by(AgentOutbox.run_id, AgentOutbox.created_at)
@@ -212,7 +212,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 select(AgentOutbox)
                 .where(
                     AgentOutbox.run_id == run_id,
-                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
                     AgentOutbox.status == "pending",
                 )
                 .with_for_update(skip_locked=True)

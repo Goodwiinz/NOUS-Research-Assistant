@@ -84,6 +84,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.agent_outbox import (
     DISPATCH_KIND_STREAM,
     DISPATCH_KINDS,
+    HANDOFF_RESUME_KIND,
     HARNESS_EXECUTE_KIND,
     AgentOutbox,
 )
@@ -110,15 +111,10 @@ from src.shared.enums import TERMINAL_JOB_STATUSES, AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 
-# Dispatch kinds (DISPATCH_KIND_STREAM, HARNESS_EXECUTE_KIND) live with the
-# model so agent_run_service and the harness services can filter on them
-# without importing this module. Free-form by design (see the model
+# Outbox kinds (DISPATCH_KIND_STREAM, HARNESS_EXECUTE_KIND, HANDOFF_RESUME_KIND)
+# live with the model so agent_run_service and the harness services can filter
+# on them without importing this module; this module re-exports them. Free-form by design (see the model
 # docstring): a new one is a constant there, not a migration.
-
-# A finished machine-handoff child's promise to resume its parent's graph.
-# Keyed by the CHILD run id (uq_agent_outbox_run_kind) so one parent can hand
-# off more than once; claimed exactly once by the resume drain.
-HANDOFF_RESUME_KIND = "handoff.resume"
 
 # Prefix keeps /stream and /execute idempotency namespaces disjoint: the same
 # client_message_id sent to both endpoints is two different submissions.
@@ -230,10 +226,15 @@ async def _existing_outbox_id(db: AsyncSession, run_id: str) -> Optional[str]:
     """The dispatch record for *run_id* (keyed by a server-generated id).
 
     Filtered on the dispatch kinds: a finished handoff child also holds a
-    ``handoff.resume`` row, which is not the record a replay reports.
+    ``handoff.resume`` row, which is not the record a replay reports. A run
+    has one dispatch row today; should it ever hold both dispatch kinds, the
+    first one written is the record, deterministically.
     """
-    stmt = select(AgentOutbox.id).where(
-        AgentOutbox.run_id == run_id, AgentOutbox.kind.in_(DISPATCH_KINDS)
+    stmt = (
+        select(AgentOutbox.id)
+        .where(AgentOutbox.run_id == run_id, AgentOutbox.kind.in_(DISPATCH_KINDS))
+        .order_by(AgentOutbox.created_at, AgentOutbox.id)
+        .limit(1)
     )
     found = (await db.execute(stmt)).scalar_one_or_none()
     return str(found) if found is not None else None
