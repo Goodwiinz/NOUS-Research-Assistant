@@ -37,6 +37,7 @@ _PATH = Path(__file__).resolve().parents[2] / "alembic/versions/mh01_machine_han
 _INDEXES = (
     "uq_agent_runs_active_thread",
     "idx_agent_runs_parent",
+    "uq_agent_runs_handoff_call",
     "uq_agent_outbox_run_kind",
 )
 
@@ -174,7 +175,7 @@ def _swap(predicate: str) -> Callable[[Any], None]:
 async def test_child_and_parent_share_a_thread(engine: AsyncEngine) -> None:
     first = await _run(engine, "upgrade")
     second = await _run(engine, "upgrade")  # idempotent re-run
-    assert sum("CREATE UNIQUE INDEX CONCURRENTLY" in s for s in first) == 2
+    assert sum("CREATE UNIQUE INDEX CONCURRENTLY" in s for s in first) == 3
     # The re-run finds the slot index already narrowed and does not rebuild it.
     assert not any("uq_agent_runs_active_thread_new" in s for s in second)
     validated = await _validated(engine)
@@ -327,7 +328,11 @@ async def test_downgrade_restores_the_pre_mh01_schema(engine: AsyncEngine) -> No
     indexes = await _index_validity(engine)
     assert indexes["uq_agent_runs_active_thread"] is True
     assert indexes["uq_agent_outbox_run"] is True
-    for gone in ("idx_agent_runs_parent", "uq_agent_outbox_run_kind"):
+    for gone in (
+        "idx_agent_runs_parent",
+        "uq_agent_outbox_run_kind",
+        "uq_agent_runs_handoff_call",
+    ):
         assert gone not in indexes
     assert "parent_run_id" not in await _index_def(
         engine, "uq_agent_runs_active_thread"
@@ -337,7 +342,7 @@ async def test_downgrade_restores_the_pre_mh01_schema(engine: AsyncEngine) -> No
             text(
                 "SELECT count(*) FROM information_schema.columns WHERE "
                 "table_schema = current_schema() AND table_name = 'agent_runs' "
-                "AND column_name = 'parent_run_id'"
+                "AND column_name IN ('parent_run_id', 'handoff_tool_call_id')"
             )
         )
         validated = await db.scalar(
@@ -448,3 +453,34 @@ async def test_swap_times_out_and_retries_instead_of_hanging(
         engine, "uq_agent_runs_active_thread"
     )
     assert "uq_agent_runs_active_thread_new" not in await _index_validity(engine)
+
+
+async def test_one_child_per_parent_tool_call(engine: AsyncEngine) -> None:
+    # Mutation check: drop the uq_agent_runs_handoff_call build from mh01 and
+    # the second "call-1" child inserts.
+    await _run(engine, "upgrade")
+    assert (await _index_validity(engine))["uq_agent_runs_handoff_call"] is True
+    parent = str(uuid4())
+    insert_child = text(
+        "INSERT INTO agent_runs (job_id, status, parent_run_id, handoff_tool_call_id) "
+        "VALUES (:j, 'completed', :p, :c)"
+    )
+    async with engine.begin() as db:
+        await db.execute(
+            text("INSERT INTO agent_runs (job_id, status) VALUES (:j, 'delegated')"),
+            {"j": parent},
+        )
+        for call in ("call-1", "call-2", None, None):
+            await db.execute(insert_child, {"j": str(uuid4()), "p": parent, "c": call})
+        with pytest.raises(IntegrityError, match="uq_agent_runs_handoff_call"):
+            async with db.begin_nested():
+                await db.execute(
+                    insert_child, {"j": str(uuid4()), "p": parent, "c": "call-1"}
+                )
+        # Another parent may reuse the call id.
+        other = str(uuid4())
+        await db.execute(
+            text("INSERT INTO agent_runs (job_id, status) VALUES (:j, 'completed')"),
+            {"j": other},
+        )
+        await db.execute(insert_child, {"j": str(uuid4()), "p": other, "c": "call-1"})
