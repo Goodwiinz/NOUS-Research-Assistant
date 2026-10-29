@@ -184,6 +184,15 @@ def _coerce_status(value: Any) -> Optional[JobStatus]:
         return None
 
 
+def top_level_run() -> Any:
+    """Predicate for runs that own a thread's turn (not handoff children).
+
+    A child Codex run shares its parent's thread; thread-scoped active/latest
+    lookups must never see it, or ``scalar_one_or_none`` finds two rows.
+    """
+    return AgentRun.parent_run_id.is_(None)
+
+
 # ---------------------------------------------------------------------------
 # Core API (explicit session — unit-testable against sqlite)
 # ---------------------------------------------------------------------------
@@ -319,6 +328,7 @@ async def upsert_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_uuid,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -509,6 +519,7 @@ async def _transition_existing_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_id,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -741,6 +752,7 @@ async def get_active_run_for_thread(
         return None
     stmt = select(AgentRun).where(
         AgentRun.thread_id == thread_uuid,
+        top_level_run(),
         AgentRun.organization_id == _coerce_uuid(organization_id),
         AgentRun.user_id == _coerce_uuid(user_id),
         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
@@ -773,6 +785,7 @@ async def get_latest_run_for_thread(
         select(AgentRun)
         .where(
             AgentRun.thread_id == thread_uuid,
+            top_level_run(),
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
         )

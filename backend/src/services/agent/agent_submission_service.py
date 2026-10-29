@@ -87,7 +87,7 @@ from src.models.agent_run_event import AgentRunEvent
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.thread import Thread
 from src.schemas.integration_context import IntegrationContext
-from src.services.agent.agent_run_service import ActiveRunConflict
+from src.services.agent.agent_run_service import ActiveRunConflict, top_level_run
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
 from src.services.threads.message_branches import (
@@ -461,6 +461,7 @@ async def _ensure_thread_idle(
         await db.execute(
             select(AgentRun).where(
                 AgentRun.thread_id == thread_id,
+                top_level_run(),
                 AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
             )
         )
@@ -1054,6 +1055,7 @@ async def accept_submission(
             await db.execute(
                 select(AgentRun.job_id).where(
                     AgentRun.thread_id == thread_uuid,
+                    top_level_run(),
                     AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                 )
             )
