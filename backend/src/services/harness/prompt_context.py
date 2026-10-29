@@ -17,6 +17,12 @@ from src.models.integration_grant import IntegrationGrant
 from src.services.integrations.context import IntegrationAccessDenied
 from src.utils.token_counter import count_tokens
 
+MAX_INPUT_CHARS = 65536
+HANDOFF_PREFIX = (
+    "Task handed over from the NOUS research assistant. Work in this folder "
+    "until the task is done, then reply with a short summary of what you did.\n\n"
+)
+
 
 @dataclass(frozen=True)
 class HarnessPrompt:
@@ -59,6 +65,21 @@ async def build_harness_prompt(db: AsyncSession, *, run_id: str) -> HarnessPromp
     if grant is None:
         raise IntegrationAccessDenied()
     await _authorize(db, grant_context(grant), run, session)
+    brief = (run.run_metadata or {}).get("handoff_brief")
+    if brief is not None:
+        # Machine handoff: the NOUS agent wrote a task brief; the chat history
+        # stays with NOUS. The digest pins the exact input for prompt_is_current.
+        if not isinstance(brief, str) or not brief.strip():
+            raise IntegrationAccessDenied()
+        value = HANDOFF_PREFIX + brief
+        if len(value) > MAX_INPUT_CHARS:
+            raise IntegrationAccessDenied()
+        return HarnessPrompt(
+            input=value,
+            source_message_ids=(),
+            source_digest=hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            history_truncated=False,
+        )
     current: Any = (
         await db.get(ChatMessage, run.user_message_id, populate_existing=True)
         if run.user_message_id
@@ -73,7 +94,7 @@ async def build_harness_prompt(db: AsyncSession, *, run_id: str) -> HarnessPromp
         or current.superseded_by_message_id is not None
         or not isinstance(current.content, str)
         or not current.content.strip()
-        or len(current.content) > 65536
+        or len(current.content) > MAX_INPUT_CHARS
     ):
         raise IntegrationAccessDenied()
     max_messages = max(1, settings.THREAD_DEFAULT_MAX_MESSAGES)
@@ -105,7 +126,7 @@ async def build_harness_prompt(db: AsyncSession, *, run_id: str) -> HarnessPromp
         candidate = [row, *selected]
         value = _serialize(candidate, current)
         if (
-            len(value) > 65536
+            len(value) > MAX_INPUT_CHARS
             or count_tokens(value) > settings.THREAD_DEFAULT_MAX_TOKENS
         ):
             break
