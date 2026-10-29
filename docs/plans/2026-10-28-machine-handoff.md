@@ -1842,6 +1842,19 @@ Open PR 2 after running PR 1's verification commands.
 
 ## PR 3: Graph
 
+> **Carry-over from PR 2 (2026-10-29, final PR 2 review). These are part of PR 3.**
+>
+> - **`existing_handoff_run` now requires `user_id` and `organization_id`** (keyword arguments). Task 3.5's `_existing_child` must pass them, taken from `_actor_and_thread`'s user. Otherwise the call raises TypeError.
+> - **The brief's limits are checked before the card.** `create_handoff_run` refuses a blank brief or one over 8,000 characters (`MAX_BRIEF_CHARS`), but only after approval, and with the generic `REFUSED_CLIENT`. Put `max_length=8000` on the `run_on_machine` `brief` argument (Task 3.2), and refuse in `handoff_approval_node` before the interrupt, so the user never approves a brief that cannot run.
+> - **`create_handoff_run` commits**, including on replay, so it needs a clean session. Call it through `tool_session()`, never the stream's session.
+> - **Check for a lock wait.** Confirm that the stream producer holds no uncommitted lock on its own `agent_runs` row while graph nodes run. If it does, `create_handoff_run`'s `FOR UPDATE` on the parent will wait on it.
+> - **The parent must be `running` for a new child.** Confirm that the post-confirm resume moves the parent from `awaiting_confirmation` back to `running` before `handoff_node` runs. Replaying an existing child is exempt.
+> - **`handoff_reply` can be missing.** Only `project_terminal` writes it. Children ended by `dispatch_pending`'s terminalize, `cancel_undelivered_start` or `request_run_cancellation` have no reply, so `read_handoff_outcome` must fall back to the child's status and terminal event. The reply is also capped at 4,000 characters.
+> - **Kinds.** `HANDOFF_RESUME_KIND` lives in `models/agent_outbox.py` (with `DISPATCH_KINDS` and `HARNESS_EXECUTE_KIND`), and the drain filters on it. Any new dispatch kind must be added to `DISPATCH_KINDS`.
+> - **`record_observation`'s terminal branch** (`runs.py` ~325-341) skips `finalize_submission`, and so skips `write_handoff_resume`. Task 3.11 must pin that this branch is only ever reached with `"unknown"`.
+> - **Exceptions `create_handoff_run` raises:** `IntegrationAccessDenied` (and its subclasses, including `DeviceNotConnectedToProject`), `ValueError` (a chat with no project, or one no longer available) and `ActiveRunConflict` (folder in use). An unexpected `IntegrityError` re-raises. `handoff_node` maps each to a `HandoffRefusal` reason.
+> - **A refusal after the mint leaves an unused run grant** (`harness:execute`, 15-minute TTL, no session points at it), as the chat path does. Accepted.
+
 ### Task 3.1: The `handoff_started` SSE frame (both vocabularies)
 
 **Files:**
