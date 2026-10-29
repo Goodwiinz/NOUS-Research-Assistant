@@ -2316,6 +2316,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify (generated): `backend/openapi.json`, `frontend/src/types/generated/api.d.ts`.
 - Test: `backend/tests/unit/agent/test_confirmation_service.py`, plus a new `backend/tests/unit/api/agent/test_handoff_confirm.py`.
 
+> **Amendment (2026-10-29, PR #2061 review, P1): approve exactly what was shown.** `handoff_approval_node` no longer falls back to a re-computed proposal (Task 3.5). So on every approve, the confirm path must put a `target` into the resume value. That is the user's edited target if one was sent. Otherwise it is the `handoff_target` read from the **verified saved interrupt**: the same snapshot `require_approval` already checked against the receipt, never a fresh `_propose`. Then re-validate that exact target (binding owned, not deleted, folder in this project or covered by the account pairing, folder not held by `uq_harness_active_workspace`). If it fails, refuse the confirm with a stable error the card can show ("That folder is no longer available. Pick another."). Never substitute a different folder. This keeps the complete-action approval binding in `docs/engineering/agent-approvals.md`. Add tests: (a) approve without an edit after the last-used folder changes → the displayed folder runs, or the confirm is refused; it is never the new one. (b) The displayed folder becomes locked before approve → refused, the parent stays parked, and the card can re-try with an edit. Mutation-verify (a) by restoring the old fallback.
+
 **Step 1: Failing tests.** In `test_confirmation_service.py`:
 
 ```python
@@ -2836,9 +2838,15 @@ def make_handoff_approval_node(branch: str) -> Callable[..., Any]:
                 "handoff_decision": {"tool_call_id": call["id"], "outcome": "denied"},
                 "user_confirmed": False,
             }
-        target = (decision or {}).get("target") or (
-            proposal.wire() if proposal is not None else None
-        )
+        # Only the target the user saw (or edited) may run. On resume this node
+        # replays from the top and ``_propose`` may now return a different
+        # folder (a lock, a newer last-used folder), so it is never used here.
+        # The confirm path (Task 3.4) always fills ``target``: the user's edit,
+        # or the ``handoff_target`` from the verified saved interrupt. It
+        # re-validates that exact target and refuses, never substitutes.
+        target = (decision or {}).get("target")
+        if not target:
+            return refused(REFUSED_CLIENT)
         return {
             "handoff_decision": {
                 "tool_call_id": call["id"],
@@ -3368,6 +3376,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `backend/tests/unit/tasks/test_beat_schedule.py` (`_EXPECTED_KEYS`).
 - Test: `backend/tests/unit/services/agent/test_handoff_resume.py` (new).
 
+> **Amendments (2026-10-29, PR #2061 Codex review). These are part of this task.**
+>
+> 1. **Retries are fenced to the parent's current handoff.** A finished child's `handoff.resume` row stays `dispatched`. Both the re-claim scan and its fence therefore require `parent.run_metadata.handoff_run_id == outbox.run_id` (written into the code below). The producer's park (Task 3.7) must overwrite `handoff_run_id` and `handoff_approval_id` on **every** park, so a second handoff replaces the first. Test: two sequential handoffs on one parent; the first resumes normally. Park the second, finish its child, claim it, then age the parent as if that worker crashed. The re-claim must return the **second** child, never the first. Mutation-verify by dropping the `handoff_run_id` predicate.
+> 2. **A child created before its parent parked is still resumed.** `handoff_node` commits the child (Task 2.4), and only then does the stream producer park the parent as `delegated` with `handoff_approval_id` (Task 3.7). If the producer's worker dies in that window, the parent stays `running` with no heartbeat and no `handoff_run_id`. The pending fence (`delegated`) never matches it, and the stale-run sweeper would later fail it. Add a third claim branch: a **pending** row whose parent is `running`, unbeaten for `RECLAIM_AFTER_SECONDS`, and whose `handoff_run_id` is unset or equals this child. Claim it with the stale-`running` fence. In `resume_handoff_parent`, when `claim.approval_id` is empty, read the checkpoint. If the graph is paused on an interrupt whose value names this child (`handoff_run_id`), derive the approval receipt from that snapshot with the same helper the producer uses (`pending_confirmation` → its `approval_id`), store it on the parent, and resume. If not, call `close_with_codex_reply`. Crash-injection test: create the child, skip the producer's park (simulating the crash), finish the child, age the parent. The drain must resume the parent with the outcome. Mutation-verify by removing the branch: the parent stays `running` and nothing is claimed.
+> 3. **Each resume runs in its own budgeted task.** Celery's defaults (`task_soft_time_limit=300`, `celery_app.py:220`) are below the graph's 360 s timeout, and the old drain awaited up to 5 resumes in one tick. Now the beat drain only claims, and `resume_handoff` (soft limit 420 s, hard 480 s) runs each resume (code below). Route `src.tasks.handoff_tasks.resume_handoff` to the `agent_runs` queue next to the drain. Test: `drain_handoff_resumes` never awaits a resume (its `dispatch` is called synchronously once per claim), and the task's limits exceed the graph timeout (`RESUME_SOFT_TIME_LIMIT > 360`).
+> 4. **A Celery limit or shutdown is not a user Stop.** `CancelledError` closes the turn as cancelled only when the parent is `stopping`. Otherwise it re-raises and leaves the parent for re-claim (code below). Tests: (a) cancel the resume while the parent is `stopping` → `cancelled`. (b) Cancel it while the parent is `running` → it stays `running`, and after aging a drain re-claims it with `attempt == 2`.
+
 **Step 1: Failing tests**
 
 ```python
@@ -3464,12 +3479,17 @@ async def test_outcome_for_a_failed_child(db: AsyncSession, context: Any) -> Non
 
 async def test_drain_resumes_and_completes(db: AsyncSession, context: Any, monkeypatch) -> None:
     parent, _child = await finished_child(db)
-    resumed = AsyncMock()
-    monkeypatch.setattr(handoff_resume, "resume_handoff_parent", resumed)
-    assert await handoff_resume.drain_handoff_resumes(db) == 1
-    (claim, outcome), _ = resumed.await_args
+    dispatched: list[tuple[Any, dict[str, Any]]] = []
+    assert await handoff_resume.drain_handoff_resumes(
+        db, dispatch=lambda c, o: dispatched.append((c, o))
+    ) == 1
+    ((claim, outcome),) = dispatched
     assert claim.parent_run_id == parent and outcome["status"] == "completed"
     assert claim.attempt == 1
+    resumed = AsyncMock()
+    monkeypatch.setattr(handoff_resume, "resume_handoff_parent", resumed)
+    await handoff_resume.run_claimed_resume(claim, outcome)
+    resumed.assert_awaited_once_with(claim, outcome)
 
 
 async def _age_parent(db: AsyncSession, parent: str, seconds: int) -> None:
@@ -3517,7 +3537,11 @@ async def test_exhausted_attempts_keep_codex_reply(
     gave_up = AsyncMock()
     monkeypatch.setattr(handoff_resume, "resume_handoff_parent", resumed)
     monkeypatch.setattr(handoff_resume, "close_with_codex_reply", gave_up)
-    assert await handoff_resume.drain_handoff_resumes(db) == 1
+    dispatched: list[tuple[Any, dict[str, Any]]] = []
+    assert await handoff_resume.drain_handoff_resumes(
+        db, dispatch=lambda c, o: dispatched.append((c, o))
+    ) == 1
+    await handoff_resume.run_claimed_resume(*dispatched[0])
     resumed.assert_not_awaited()
     (claim, outcome), _ = gave_up.await_args
     assert claim.attempt == 2 and outcome["reply"] == "All tests pass."
@@ -3578,7 +3602,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3645,6 +3669,11 @@ async def claim_handoff_resume(
                             AgentOutbox.status == AgentOutboxStatus.DISPATCHED.value,
                             AgentRun.status == JobStatus.RUNNING.value,
                             AgentRun.updated_at < stale_before,
+                            # Only the parent's *current* handoff: an earlier
+                            # child's dispatched row stays dispatched forever
+                            # and must never be re-claimed for a later handoff.
+                            AgentRun.run_metadata["handoff_run_id"].as_string()
+                            == AgentOutbox.run_id,
                         ),
                     ),
                 )
@@ -3669,6 +3698,7 @@ async def claim_handoff_resume(
                 fence = and_(
                     AgentRun.status == JobStatus.RUNNING.value,
                     AgentRun.updated_at < stale_before,
+                    AgentRun.run_metadata["handoff_run_id"].as_string() == outbox.run_id,
                 )
             claimed = (
                 await db.execute(
@@ -3723,7 +3753,17 @@ async def read_handoff_outcome(db: AsyncSession, child_run_id: str) -> dict[str,
     return outcome
 
 
-async def drain_handoff_resumes(db: AsyncSession, *, limit: int = 5) -> int:
+async def drain_handoff_resumes(
+    db: AsyncSession,
+    *,
+    dispatch: Callable[[HandoffResumeClaim, dict[str, Any]], Any],
+    limit: int = 5,
+) -> int:
+    """Claim up to ``limit`` records and hand each to ``dispatch``. Fast.
+
+    The graph resume itself runs in its own Celery task (handoff_tasks), with a
+    time budget sized for one resume, never in this beat tick.
+    """
     count = 0
     for _ in range(limit):
         claim = await claim_handoff_resume(db)
@@ -3731,14 +3771,21 @@ async def drain_handoff_resumes(db: AsyncSession, *, limit: int = 5) -> int:
             break
         outcome = await read_handoff_outcome(db, claim.child_run_id)
         await db.commit()
-        if claim.attempt > MAX_RESUME_ATTEMPTS:
-            await close_with_codex_reply(
-                claim, outcome, model=await _parent_model(db, claim.parent_run_id)
-            )
-        else:
-            await resume_handoff_parent(claim, outcome)
+        dispatch(claim, outcome)
         count += 1
     return count
+
+
+async def run_claimed_resume(claim: HandoffResumeClaim, outcome: dict[str, Any]) -> None:
+    """Body of the per-resume task: give up with the reply, or resume."""
+    if claim.attempt > MAX_RESUME_ATTEMPTS:
+        from src.core.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            model = await _parent_model(db, claim.parent_run_id)
+        await close_with_codex_reply(claim, outcome, model=model)
+    else:
+        await resume_handoff_parent(claim, outcome)
 
 
 def _assistant_client_message_id(claim: HandoffResumeClaim) -> str:
@@ -3939,13 +3986,23 @@ async def resume_handoff_parent(claim: HandoffResumeClaim, outcome: dict[str, An
             payload={"assistant_message_id": assistant_id},
         )
     except asyncio.CancelledError:
-        # Stop during the resumed step (the parent is RUNNING again, so the
-        # ordinary request_run_cancellation path applies).
-        await close(
-            JobStatus.CANCELLED,
-            event_type=RunEventType.RUN_CANCELLED,
-            payload={"reason": "user_requested"},
-        )
+        # Cancellation has two causes. A user Stop during the resumed step
+        # moves the parent to STOPPING (the ordinary request_run_cancellation
+        # path), and only that one closes the turn as cancelled. Anything else
+        # (a Celery time limit cancelling run_async, a worker shutdown) leaves
+        # the parent RUNNING and unbeaten, so the drain re-claims it later
+        # (RECLAIM_AFTER_SECONDS) instead of losing the answer.
+        async with AsyncSessionLocal() as db:
+            status = await db.scalar(
+                select(AgentRun.status).where(AgentRun.job_id == claim.parent_run_id)
+            )
+        if status == JobStatus.STOPPING.value:
+            await close(
+                JobStatus.CANCELLED,
+                event_type=RunEventType.RUN_CANCELLED,
+                payload={"reason": "user_requested"},
+            )
+        raise
     except Exception:
         # ApprovalExpired (the checkpoint moved past the handoff interrupt, so
         # a retry would not be safe), the 360 s timeout, and graph errors all
@@ -3965,10 +4022,23 @@ async def resume_handoff_parent(claim: HandoffResumeClaim, outcome: dict[str, An
 `backend/src/tasks/handoff_tasks.py`:
 
 ```python
-"""Machine handoff resume drain (beat): claim finished children, resume parents."""
+"""Machine handoff resume (beat drain + one task per resume).
+
+The beat drain only claims (fast, well inside the default 300 s soft limit)
+and enqueues one ``resume_handoff`` task per claim. Each resume gets its own
+budget above the graph's 360 s timeout, so a long healthy resume never hits a
+Celery limit, and one slow resume never delays the others.
+"""
+
+from dataclasses import asdict
+from typing import Any
 
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
+
+# Graph timeout (360 s) + user/graph setup + finalize, under the hard limit.
+RESUME_SOFT_TIME_LIMIT = 420
+RESUME_TIME_LIMIT = 480
 
 
 async def _drain() -> int:
@@ -3976,17 +4046,33 @@ async def _drain() -> int:
     from src.services.agent.handoff_resume import drain_handoff_resumes
 
     async with AsyncSessionLocal() as db:
-        return await drain_handoff_resumes(db)
+        return await drain_handoff_resumes(
+            db, dispatch=lambda claim, outcome: resume_handoff.delay(asdict(claim), outcome)
+        )
 
 
 @celery_app.task(name="src.tasks.handoff_tasks.drain_handoff_resumes")
 def drain_handoff_resumes() -> int:
     return run_async(_drain())
+
+
+@celery_app.task(
+    name="src.tasks.handoff_tasks.resume_handoff",
+    soft_time_limit=RESUME_SOFT_TIME_LIMIT,
+    time_limit=RESUME_TIME_LIMIT,
+)
+def resume_handoff(claim: dict[str, Any], outcome: dict[str, Any]) -> None:
+    from src.services.agent.handoff_resume import HandoffResumeClaim, run_claimed_resume
+
+    run_async(run_claimed_resume(HandoffResumeClaim(**claim), outcome))
 ```
+
+If enqueueing fails after the claim committed, nothing is lost: the parent stays `running` with no heartbeat, and the next drain re-claims it after `RECLAIM_AFTER_SECONDS`. `HandoffResumeClaim` must stay JSON-serializable (string ids). Convert `organization_id`, `user_id` and `thread_id` to `str` in `claim_handoff_resume`.
 
 `celery_app.py` changes:
 - add `"src.tasks.handoff_tasks",` to `include`;
 - add the route `"src.tasks.handoff_tasks.drain_handoff_resumes": {"queue": "agent_runs"},`;
+- add the route `"src.tasks.handoff_tasks.resume_handoff": {"queue": "agent_runs"},`;
 - add the beat entry:
 
 ```python
@@ -4030,8 +4116,8 @@ The flow:
 2. Invoke with `config()` (from Task 3.5) plus `metadata.agent_run_id = parent`. Assert the approval interrupt proposes `LOCAL`.
 3. Resume `{"confirmed": True}`. A child exists, and the interrupt value names it. Call `park_fields(pending_confirmation(...), [], "")` (from `src.services.agent.handoff`) and `finalize_submission(..., status=DELEGATED, run_metadata=...)`, which is what the producer does.
 4. `run_child_to(db, context, child, "completed")`.
-5. `drain_handoff_resumes(db) == 1`. The parent is `completed`. Exactly one assistant `ChatMessage` exists on the thread, with `client_message_id` = `uuid5("nous-assistant-handoff:{parent}:{child}")`. The final ToolMessage carries `"status": "completed"` and `"reply": "answer"`.
-6. A second `drain_handoff_resumes(db) == 0`, so one resume.
+5. `drain_handoff_resumes(db, dispatch=lambda c, o: claims.append((c, o))) == 1` (with `claims` a list), then `await run_claimed_resume(*claims[0])`; this is what the per-resume Celery task runs. The parent is `completed`. Exactly one assistant `ChatMessage` exists on the thread, with `client_message_id` = `uuid5("nous-assistant-handoff:{parent}:{child}")`. The final ToolMessage carries `"status": "completed"` and `"reply": "answer"`.
+6. A second drain with the same `dispatch` returns `0`, so one resume.
 7. Pin the `record_observation` assumption from Task 2.6: call `record_observation(db, run_id=UUID(child), observation="unknown")` on a non-terminal child and assert that no resume row is written.
 
 Write the code with the helpers above.
