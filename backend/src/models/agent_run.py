@@ -51,7 +51,8 @@ AGENT_RUN_STATUS_CHECK = (
     "status IN (" + ", ".join(f"'{s.value}'" for s in JobStatus) + ")"
 )
 
-# Shared with the mh01 migration so the predicate has one source.
+# mh01_machine_handoff repeats this text literally (migrations never import
+# models); tests/unit/test_machine_handoff_migration.py keeps them equal.
 AGENT_RUN_ACTIVE_THREAD_PREDICATE = (
     "thread_id IS NOT NULL AND parent_run_id IS NULL AND status IN "
     "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering', "
@@ -112,7 +113,11 @@ class AgentRun(Base):
     # never write their own assistant row (services/harness/handoff.py).
     parent_run_id = Column(
         String(36),
-        ForeignKey("agent_runs.job_id", ondelete="SET NULL"),
+        ForeignKey(
+            "agent_runs.job_id",
+            name="fk_agent_runs_parent_run_id",
+            ondelete="SET NULL",
+        ),
         nullable=True,
     )
 

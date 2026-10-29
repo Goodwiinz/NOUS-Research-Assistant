@@ -1,0 +1,333 @@
+"""mh01 on PostgreSQL: child runs, delegated slot, per-kind outbox key.
+
+Requires ORCHESTRATION_TEST_DATABASE_URL (skips otherwise: NOT RUN).
+Mutation checks: dropping ``parent_run_id IS NULL`` from the predicate fails
+test_child_and_parent_share_a_thread; leaving 'delegated' out of the CHECK
+fails it too (CheckViolation); skipping _drop_index_if_invalid in the swap
+fails test_upgrade_repairs_an_interrupted_build; dropping the downgrade's
+several-outbox-rows guard fails test_downgrade_refuses_a_second_outbox_row.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import event, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
+
+_PATH = Path(__file__).resolve().parents[2] / "alembic/versions/mh01_machine_handoff.py"
+_INDEXES = (
+    "uq_agent_runs_active_thread",
+    "idx_agent_runs_parent",
+    "uq_agent_outbox_run_kind",
+)
+
+
+@pytest.fixture
+async def engine() -> AsyncIterator[AsyncEngine]:
+    url = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    schema = "mh01_" + uuid4().hex
+    admin = create_async_engine(url)
+    async with admin.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    scoped = create_async_engine(
+        url, connect_args={"server_settings": {"search_path": schema}}
+    )
+    try:
+        async with scoped.begin() as conn:
+            await conn.execute(text("CREATE TABLE threads (id UUID PRIMARY KEY)"))
+            await conn.execute(
+                text(
+                    "CREATE TABLE agent_runs (job_id VARCHAR(36) PRIMARY KEY, "
+                    "thread_id UUID REFERENCES threads(id), status VARCHAR(32) NOT NULL, "
+                    "CONSTRAINT ck_agent_runs_status CHECK (status IN ('queued','running',"
+                    "'awaiting_confirmation','stopping','recovering','completed','failed',"
+                    "'cancelled')))"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_agent_runs_active_thread ON agent_runs (thread_id) "
+                    "WHERE thread_id IS NOT NULL AND status IN ('queued','running',"
+                    "'awaiting_confirmation','stopping','recovering')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE agent_outbox (id UUID PRIMARY KEY, run_id VARCHAR(36) "
+                    "NOT NULL REFERENCES agent_runs(job_id), kind VARCHAR(64) NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text("CREATE UNIQUE INDEX uq_agent_outbox_run ON agent_outbox (run_id)")
+            )
+        yield scoped
+    finally:
+        await scoped.dispose()
+        async with admin.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await admin.dispose()
+
+
+def _migration() -> Any:
+    spec = importlib.util.spec_from_file_location("mh01_test", _PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _run(engine: AsyncEngine, direction: str) -> list[str]:
+    migration, executed = _migration(), []
+
+    def record(_c: Any, _cur: Any, statement: str, *_a: Any) -> None:
+        executed.append(" ".join(statement.split()))
+
+    def migrate(connection: Any) -> None:
+        context = MigrationContext.configure(connection)
+        with Operations.context(context), context.begin_transaction():
+            getattr(migration, direction)()
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(migrate)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    return executed
+
+
+async def _index_validity(engine: AsyncEngine) -> dict[str, bool]:
+    async with engine.connect() as db:
+        rows = await db.execute(
+            text(
+                "SELECT c.relname, i.indisvalid FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = current_schema()"
+            )
+        )
+        return {name: valid for name, valid in rows}
+
+
+async def _index_def(engine: AsyncEngine, name: str) -> str:
+    async with engine.connect() as db:
+        return str(
+            await db.scalar(
+                text("SELECT pg_get_indexdef(to_regclass(:n))"), {"n": name}
+            )
+        )
+
+
+async def test_child_and_parent_share_a_thread(engine: AsyncEngine) -> None:
+    first = await _run(engine, "upgrade")
+    await _run(engine, "upgrade")  # idempotent re-run
+    assert sum("CREATE UNIQUE INDEX CONCURRENTLY" in s for s in first) == 2
+    indexes = await _index_validity(engine)
+    assert all(indexes[name] for name in _INDEXES)
+    assert "uq_agent_outbox_run" not in indexes
+    assert "uq_agent_runs_active_thread_new" not in indexes
+    thread, parent = uuid4(), str(uuid4())
+    async with engine.begin() as db:
+        await db.execute(text("INSERT INTO threads VALUES (:t)"), {"t": thread})
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,:t,'delegated',NULL)"),
+            {"j": parent, "t": thread},
+        )
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,:t,'running',:p)"),
+            {"j": str(uuid4()), "t": thread, "p": parent},
+        )
+        with pytest.raises(IntegrityError, match="uq_agent_runs_active_thread"):
+            async with db.begin_nested():
+                await db.execute(
+                    text("INSERT INTO agent_runs VALUES (:j,:t,'queued',NULL)"),
+                    {"j": str(uuid4()), "t": thread},
+                )
+        await db.execute(
+            text("INSERT INTO agent_outbox VALUES (:i,:r,'agent.stream.execute')"),
+            {"i": uuid4(), "r": parent},
+        )
+        await db.execute(
+            text("INSERT INTO agent_outbox VALUES (:i,:r,'handoff.resume')"),
+            {"i": uuid4(), "r": parent},
+        )
+        with pytest.raises(IntegrityError, match="uq_agent_outbox_run_kind"):
+            async with db.begin_nested():
+                await db.execute(
+                    text("INSERT INTO agent_outbox VALUES (:i,:r,'handoff.resume')"),
+                    {"i": uuid4(), "r": parent},
+                )
+
+
+async def test_parent_delete_unlinks_child(engine: AsyncEngine) -> None:
+    await _run(engine, "upgrade")
+    parent, child = str(uuid4()), str(uuid4())
+    async with engine.begin() as db:
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,NULL,'completed',NULL)"),
+            {"j": parent},
+        )
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,NULL,'completed',:p)"),
+            {"j": child, "p": parent},
+        )
+        await db.execute(
+            text("DELETE FROM agent_runs WHERE job_id = :j"), {"j": parent}
+        )
+        linked = await db.scalar(
+            text("SELECT parent_run_id FROM agent_runs WHERE job_id = :j"), {"j": child}
+        )
+    assert linked is None
+
+
+async def test_upgrade_repairs_an_interrupted_build(engine: AsyncEngine) -> None:
+    # A failed CREATE UNIQUE INDEX CONCURRENTLY leaves its index INVALID under
+    # the temporary name; IF NOT EXISTS alone would swap it in unenforced.
+    async with engine.begin() as db:
+        for _ in range(2):
+            await db.execute(
+                text("INSERT INTO agent_runs VALUES (:j,NULL,'completed')"),
+                {"j": str(uuid4())},
+            )
+    async with engine.connect() as raw:
+        auto = await raw.execution_options(isolation_level="AUTOCOMMIT")
+        with pytest.raises(DBAPIError):
+            await auto.execute(
+                text(
+                    "CREATE UNIQUE INDEX CONCURRENTLY uq_agent_runs_active_thread_new "
+                    "ON agent_runs (status)"
+                )
+            )
+    assert (await _index_validity(engine))["uq_agent_runs_active_thread_new"] is False
+
+    await _run(engine, "upgrade")
+
+    indexes = await _index_validity(engine)
+    assert all(indexes[name] for name in _INDEXES)
+    assert "parent_run_id IS NULL" in await _index_def(
+        engine, "uq_agent_runs_active_thread"
+    )
+    thread = uuid4()
+    async with engine.begin() as db:
+        await db.execute(text("INSERT INTO threads VALUES (:t)"), {"t": thread})
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,:t,'delegated',NULL)"),
+            {"j": str(uuid4()), "t": thread},
+        )
+        with pytest.raises(IntegrityError):
+            async with db.begin_nested():
+                await db.execute(
+                    text("INSERT INTO agent_runs VALUES (:j,:t,'queued',NULL)"),
+                    {"j": str(uuid4()), "t": thread},
+                )
+
+
+async def test_downgrade_refuses_while_children_exist(engine: AsyncEngine) -> None:
+    await _run(engine, "upgrade")
+    thread = uuid4()
+    async with engine.begin() as db:
+        await db.execute(text("INSERT INTO threads VALUES (:t)"), {"t": thread})
+        parent = str(uuid4())
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,:t,'completed',NULL)"),
+            {"j": parent, "t": thread},
+        )
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,:t,'completed',:p)"),
+            {"j": str(uuid4()), "t": thread, "p": parent},
+        )
+    with pytest.raises(Exception, match="handoff"):
+        await _run(engine, "downgrade")
+
+
+async def test_downgrade_refuses_a_second_outbox_row(engine: AsyncEngine) -> None:
+    # A child whose parent was deleted has parent_run_id NULL but may still
+    # own a dispatch row and a handoff.resume row; uq_agent_outbox_run would
+    # fail to build (leaving an INVALID index) instead of refusing cleanly.
+    await _run(engine, "upgrade")
+    run = str(uuid4())
+    async with engine.begin() as db:
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,NULL,'completed',NULL)"),
+            {"j": run},
+        )
+        for kind in ("agent.stream.execute", "handoff.resume"):
+            await db.execute(
+                text("INSERT INTO agent_outbox VALUES (:i,:r,:k)"),
+                {"i": uuid4(), "r": run, "k": kind},
+            )
+    with pytest.raises(Exception, match="handoff"):
+        await _run(engine, "downgrade")
+    assert "uq_agent_outbox_run" not in await _index_validity(engine)
+
+
+async def test_downgrade_restores_the_pre_mh01_schema(engine: AsyncEngine) -> None:
+    await _run(engine, "upgrade")
+    await _run(engine, "downgrade")
+    await _run(engine, "downgrade")  # idempotent re-run
+
+    indexes = await _index_validity(engine)
+    assert indexes["uq_agent_runs_active_thread"] is True
+    assert indexes["uq_agent_outbox_run"] is True
+    for gone in ("idx_agent_runs_parent", "uq_agent_outbox_run_kind"):
+        assert gone not in indexes
+    assert "parent_run_id" not in await _index_def(
+        engine, "uq_agent_runs_active_thread"
+    )
+    async with engine.connect() as db:
+        columns = await db.scalar(
+            text(
+                "SELECT count(*) FROM information_schema.columns WHERE "
+                "table_schema = current_schema() AND table_name = 'agent_runs' "
+                "AND column_name = 'parent_run_id'"
+            )
+        )
+        validated = await db.scalar(
+            text(
+                "SELECT convalidated FROM pg_constraint "
+                "WHERE conname = 'ck_agent_runs_status' "
+                "AND conrelid = 'agent_runs'::regclass"
+            )
+        )
+    assert columns == 0
+    assert validated is True
+    run = str(uuid4())
+    async with engine.begin() as db:
+        with pytest.raises(IntegrityError, match="ck_agent_runs_status"):
+            async with db.begin_nested():
+                await db.execute(
+                    text("INSERT INTO agent_runs VALUES (:j,NULL,'delegated')"),
+                    {"j": str(uuid4())},
+                )
+        await db.execute(
+            text("INSERT INTO agent_runs VALUES (:j,NULL,'completed')"), {"j": run}
+        )
+        await db.execute(
+            text("INSERT INTO agent_outbox VALUES (:i,:r,'agent.stream.execute')"),
+            {"i": uuid4(), "r": run},
+        )
+        with pytest.raises(IntegrityError, match="uq_agent_outbox_run"):
+            async with db.begin_nested():
+                await db.execute(
+                    text("INSERT INTO agent_outbox VALUES (:i,:r,'handoff.resume')"),
+                    {"i": uuid4(), "r": run},
+                )
+
+    await _run(engine, "upgrade")  # round trip
+    indexes = await _index_validity(engine)
+    assert all(indexes[name] for name in _INDEXES)
