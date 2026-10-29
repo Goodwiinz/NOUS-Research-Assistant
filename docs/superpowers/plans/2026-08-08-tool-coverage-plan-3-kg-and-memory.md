@@ -122,3 +122,57 @@ Prereqs: Docker; `doctl registry login`; image pulled `--platform linux/amd64`; 
 2. **Parallel Session** — new session in the `feat/tool-coverage-bench-plan3` worktree with `superpowers:executing-plans`.
 
 Follow-on: plan 4 (arXiv / E2B / connectors — tasks 1, 7, 8).
+
+---
+
+## Amendment 2026-10-29 — status after merge
+
+Status record checked against `origin/develop` at `749c4b4cd`. The plan text
+above stays as written; this section records what happened afterwards.
+
+**Shipped:**
+
+- Tasks 0–4 merged in #1362 (`00adf1303`, 2026-08-09): both task dirs, specs,
+  the dated manifest/baseline skeletons, and promotion of capabilities 7 and 9
+  in `evals/AGENT_FLOW_BASELINE.md`.
+- #1383 (`9f5971ff6`, 2026-08-10) added the 17-task GPT-5.6 job
+  `evals/agent-full-benchmark-v1.json`. In that run, knowledge-graph flow and
+  memory roundtrip both scored 0/5. Memory failed because the saved memory
+  never became observable within the benchmark window.
+- #1386 (`856d3dfb4`, 2026-08-11) and #1387 (`d13d1a9e6`, 2026-08-11) fixed the
+  agent and tightened both verifiers. The validation table in #1386 reports
+  knowledge-graph flow at 5/5 and memory roundtrip at 5/5. The full 17×5
+  aggregate rerun was still pending when #1386 merged.
+- #1380 (`592125e63`, 2026-08-19) removed the sentinel-intent routing
+  workaround from memory roundtrip. Turn 3 now reaches `forget_memory` through
+  production routing, and three `wrong-*` calibration fixtures cover it.
+  This change merged after the #1386 runs, so that 5/5 result no longer
+  describes the current task tree.
+
+**Still open:**
+
+- **Task 5 was never recorded.** In
+  `evals/baselines/agent-flow-2026-08-08-kg-memory.json`, `benchmarks[]` is
+  empty and `recorded_at` is `""`. Capabilities 7 and 9 are still
+  `NOT YET GATED` in `AGENT_FLOW_BASELINE.md`. The #1386 PR-body results were
+  never written into the baseline, so they do not count as a recorded run.
+- Memory roundtrip needs a fresh 5-trial run on the post-#1380 tree before it
+  can be gated.
+- Knowledge-graph flow needs a recorded run whose `repository_revision` matches
+  the tree that was run. Later edits under `evals/harbor_common/` or the task
+  dir change the digests, so `harness_digest` must be recomputed at record
+  time.
+- `extract_entities` coverage is still deferred (risk 5). The cap-7 coverage
+  note marks it out of scope.
+
+**Assumptions to recheck before Task 5:**
+
+- Both Dockerfiles still use `FROM
+  registry.digitalocean.com/ragsystemregistry/backend:3a436b2-r1`. Dev has
+  since moved to AWS, so confirm this image can still be pulled at the pinned
+  digest before scheduling a run.
+- Harbor is still pinned at `0.6.6`, task schema `1.2`, in every task.toml,
+  source manifest, and baseline, and the local CLI is `0.6.6`. PyPI's latest
+  release is `0.25.0` (2026-10-25). Record Task 5 on 0.6.6 so it matches the
+  other recorded baselines. Moving to a newer Harbor is separate work, tracked
+  in [the Harbor upgrade plan](2026-10-29-harbor-0-25-upgrade.md).
