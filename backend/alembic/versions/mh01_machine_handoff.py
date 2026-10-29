@@ -4,7 +4,8 @@ Revision ID: mh01_machine_handoff
 Revises: pb01_pdf_message_branches
 
 Adds ``agent_runs.parent_run_id`` (self FK, ON DELETE SET NULL) with
-``idx_agent_runs_parent``, admits ``'delegated'`` to ``ck_agent_runs_status``,
+``idx_agent_runs_parent``, adds ``agent_runs.handoff_tool_call_id`` with
+``uq_agent_runs_handoff_call`` (one child per parent tool call), admits ``'delegated'`` to ``ck_agent_runs_status``,
 narrows ``uq_agent_runs_active_thread`` to top-level runs and adds
 ``'delegated'`` to it, and replaces ``uq_agent_outbox_run (run_id)`` with
 ``uq_agent_outbox_run_kind (run_id, kind)``.
@@ -13,8 +14,9 @@ Locking. Three kinds of step take ACCESS EXCLUSIVE on ``agent_runs``. That
 lock blocks every read and write of the table while it is held, and also while
 it is waited for, because later requests queue behind the waiter:
 
-- the opening catalog step in the migration transaction: ADD COLUMN, the FK and
-  the replaced CHECK, both ``NOT VALID`` (no table scan);
+- the opening catalog step in the migration transaction: the two nullable ADD
+  COLUMNs (no default), the FK and the replaced CHECK, both ``NOT VALID`` (no
+  table scan);
 - the active-thread swap: ``uq_agent_runs_active_thread_new`` is built
   CONCURRENTLY, then one statement drops the old index and renames the new one,
   so the slot is never unenforced and keeps the name
@@ -66,6 +68,10 @@ _ACTIVE_PREDICATE = (
     "'delegated')"
 )
 _ACTIVE_INDEX = "uq_agent_runs_active_thread"
+# Must equal models.agent_run.AGENT_RUN_HANDOFF_CALL_PREDICATE (same unit test).
+_HANDOFF_CALL_PREDICATE = (
+    "parent_run_id IS NOT NULL AND handoff_tool_call_id IS NOT NULL"
+)
 
 # ACCESS EXCLUSIVE steps: wait at most _LOCK_TIMEOUT per attempt, sleep
 # attempt * _LOCK_BACKOFF_S seconds between attempts. Read at call time, so the
@@ -159,6 +165,8 @@ def upgrade() -> None:
     # The model names the FK the same, so a create_all schema is left alone.
     opening = _exclusive(f"""
         ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id VARCHAR(36);
+        ALTER TABLE agent_runs
+            ADD COLUMN IF NOT EXISTS handoff_tool_call_id VARCHAR(255);
         IF NOT EXISTS (
             SELECT 1 FROM pg_constraint
             WHERE conname = 'fk_agent_runs_parent_run_id'
@@ -181,6 +189,12 @@ def upgrade() -> None:
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agent_runs_parent "
             "ON agent_runs (parent_run_id)"
+        )
+        _drop_index_if_invalid("uq_agent_runs_handoff_call")
+        op.execute(
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_agent_runs_handoff_call "
+            "ON agent_runs (parent_run_id, handoff_tool_call_id) "
+            f"WHERE {_HANDOFF_CALL_PREDICATE}"
         )
         if "parent_run_id IS NULL" not in (_active_index_def() or ""):
             _swap_active_thread_index(_ACTIVE_PREDICATE)
@@ -222,11 +236,13 @@ def downgrade() -> None:
         index = _active_index_def()
         if index is None or "parent_run_id" in index:
             _swap_active_thread_index(_LEGACY_ACTIVE_PREDICATE)
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS uq_agent_runs_handoff_call")
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_agent_runs_parent")
     # Catalog-only again; the check is validated after this commits.
     closing = _exclusive(f"""
         {_status_check(_STATUSES)}
         ALTER TABLE agent_runs DROP CONSTRAINT IF EXISTS fk_agent_runs_parent_run_id;
+        ALTER TABLE agent_runs DROP COLUMN IF EXISTS handoff_tool_call_id;
         ALTER TABLE agent_runs DROP COLUMN IF EXISTS parent_run_id;""")
     op.execute(f"DO $$ BEGIN {closing} END $$")
     with op.get_context().autocommit_block():

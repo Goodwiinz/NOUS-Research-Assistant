@@ -14,7 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from src.models.agent_run import AGENT_RUN_ACTIVE_THREAD_PREDICATE, AgentRun
+from src.models.agent_run import (
+    AGENT_RUN_ACTIVE_THREAD_PREDICATE,
+    AGENT_RUN_HANDOFF_CALL_PREDICATE,
+    AgentRun,
+)
 from src.shared.enums import JobStatus
 
 pytestmark = pytest.mark.unit
@@ -36,6 +40,21 @@ def _constants() -> dict[str, str]:
 
 def test_active_thread_predicate_matches_the_model() -> None:
     assert _constants()["_ACTIVE_PREDICATE"] == AGENT_RUN_ACTIVE_THREAD_PREDICATE
+
+
+def test_handoff_call_index_matches_the_model() -> None:
+    assert _constants()["_HANDOFF_CALL_PREDICATE"] == AGENT_RUN_HANDOFF_CALL_PREDICATE
+    (index,) = (
+        i for i in AgentRun.__table__.indexes if i.name == "uq_agent_runs_handoff_call"
+    )
+    assert index.unique
+    assert [c.name for c in index.columns] == ["parent_run_id", "handoff_tool_call_id"]
+    column = AgentRun.__table__.c.handoff_tool_call_id
+    assert column.nullable and column.type.length == 255
+    assert re.search(
+        r"ADD COLUMN IF NOT EXISTS handoff_tool_call_id VARCHAR\(255\);",
+        _PATH.read_text("utf-8"),
+    )
 
 
 def test_upgraded_status_check_is_the_job_status_domain() -> None:

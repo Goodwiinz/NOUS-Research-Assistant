@@ -59,6 +59,11 @@ AGENT_RUN_ACTIVE_THREAD_PREDICATE = (
     "'delegated')"
 )
 
+# One child run per (parent run, tool call); repeated literally in mh01 too.
+AGENT_RUN_HANDOFF_CALL_PREDICATE = (
+    "parent_run_id IS NOT NULL AND handoff_tool_call_id IS NOT NULL"
+)
+
 
 class AgentRun(Base):
     """One row per agent execution job (job_id from ``POST /agent/execute``)."""
@@ -121,6 +126,10 @@ class AgentRun(Base):
         ),
         nullable=True,
     )
+    # The parent graph's tool call that started this child: the handoff's
+    # idempotency key, unique per parent (uq_agent_runs_handoff_call). 255
+    # like chat_messages.tool_call_id; provider ids are far shorter.
+    handoff_tool_call_id = Column(String(255), nullable=True)
 
     # Lifecycle status; values constrained to the JobStatus domain.
     status = Column(String(32), nullable=False)
@@ -204,6 +213,16 @@ class AgentRun(Base):
             sqlite_where=text(AGENT_RUN_ACTIVE_THREAD_PREDICATE),
         ),
         Index("idx_agent_runs_parent", "parent_run_id"),
+        # A second child for the same parent tool call is impossible, whatever
+        # later writes do to run_metadata.
+        Index(
+            "uq_agent_runs_handoff_call",
+            "parent_run_id",
+            "handoff_tool_call_id",
+            unique=True,
+            postgresql_where=text(AGENT_RUN_HANDOFF_CALL_PREDICATE),
+            sqlite_where=text(AGENT_RUN_HANDOFF_CALL_PREDICATE),
+        ),
         CheckConstraint(
             "execution_provider IN ('nous', 'codex')", name="ck_agent_runs_provider"
         ),

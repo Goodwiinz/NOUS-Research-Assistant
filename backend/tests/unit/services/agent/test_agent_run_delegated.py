@@ -107,6 +107,24 @@ async def test_outbox_allows_one_row_per_run_and_kind(db: AsyncSession) -> None:
     await db.rollback()
 
 
+async def test_one_child_per_parent_tool_call(db: AsyncSession) -> None:
+    # Mutation check: drop uq_agent_runs_handoff_call from the model and the
+    # second "call-1" child commits.
+    parent = _run("delegated")
+    await db.execute(insert(AgentRun).values(**parent))
+
+    def child(call: str | None) -> dict:
+        row = _run("completed", parent=parent["job_id"], provider="codex")
+        return {**row, "handoff_tool_call_id": call}
+
+    for call in ("call-1", "call-2", None, None):
+        await db.execute(insert(AgentRun).values(**child(call)))
+    await db.commit()
+    with pytest.raises(IntegrityError):
+        await db.execute(insert(AgentRun).values(**child("call-1")))
+    await db.rollback()
+
+
 # ---------------------------------------------------------------------------
 # Thread-scoped lookups see top-level runs only
 #
