@@ -7,7 +7,8 @@ an assistant row: its reply is stored on the run for the parent's graph.
 
 Authority is the chat path's: ``create_chat_context`` mints a short-lived
 run grant from prior browser consent (project or account), and
-``reserve_workspace`` locks the folder. One transaction per call; commits.
+``reserve_workspace`` locks the folder. The mint commits the grant on its
+own; the child, its session, event and outbox row then commit together.
 """
 
 from __future__ import annotations
@@ -31,19 +32,74 @@ from src.services.threads.workspace_access import get_thread_lean
 from src.shared.enums import JobStatus
 
 MAX_BRIEF_CHARS = 8000
+HANDOFF_CALL_INDEX = "uq_agent_runs_handoff_call"
+ACTIVE_WORKSPACE_INDEX = "uq_harness_active_workspace"
+# SQLite does not name a partial unique index on IntegrityError; these exact
+# generated key messages identify the same two indexes in the unit schema.
+_SQLITE_KEY_MESSAGES = {
+    HANDOFF_CALL_INDEX: (
+        "unique constraint failed: "
+        "agent_runs.parent_run_id, agent_runs.handoff_tool_call_id"
+    ),
+    ACTIVE_WORKSPACE_INDEX: (
+        "unique constraint failed: "
+        "harness_sessions.device_id, harness_sessions.workspace_id"
+    ),
+}
+
+
+def _constraint_name(exc: IntegrityError) -> str | None:
+    """The driver-reported constraint name (asyncpg / psycopg), if any."""
+    current: Any = exc
+    seen: list[Any] = []
+    for _ in range(5):
+        if current is None or current in seen:
+            break
+        seen.append(current)
+        for source in (current, getattr(current, "diag", None)):
+            name = getattr(source, "constraint_name", None)
+            if name:
+                return str(name)
+        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
+    return None
+
+
+def _violates(exc: IntegrityError, index: str) -> bool:
+    """Whether ``exc`` is a collision on exactly ``index``."""
+    name = _constraint_name(exc)
+    if name is not None:
+        return name == index
+    return _SQLITE_KEY_MESSAGES[index] in str(exc.orig).lower()
+
+
+async def _lock_parent(db: AsyncSession, parent_run_id: str) -> Any:
+    return await db.scalar(
+        select(AgentRun)
+        .where(AgentRun.job_id == parent_run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def existing_handoff_run(
-    db: AsyncSession, *, parent_run_id: str, tool_call_id: str
+    db: AsyncSession,
+    *,
+    parent_run_id: str,
+    tool_call_id: str,
+    user_id: Any,
+    organization_id: Any,
 ) -> str | None:
     """The child this tool call already created, if any (node replay).
 
-    Not an authority check: callers pass a parent run they already own.
+    ``uq_agent_runs_handoff_call`` keeps it unique. The owner filter is
+    defense in depth: callers pass a parent run they already own.
     """
     found: str | None = await db.scalar(
         select(AgentRun.job_id).where(
             AgentRun.parent_run_id == parent_run_id,
-            AgentRun.run_metadata["handoff_tool_call_id"].as_string() == tool_call_id,
+            AgentRun.handoff_tool_call_id == tool_call_id,
+            AgentRun.user_id == user_id,
+            AgentRun.organization_id == organization_id,
         )
     )
     return found
@@ -62,19 +118,19 @@ async def create_handoff_run(
     """Create (or find) the child Codex run for one ``run_on_machine`` call.
 
     Raises IntegrationAccessDenied for a parent this caller cannot hand off
-    from, DeviceNotConnectedToProject / DeviceBoundToAnotherChat for a target
-    outside the user's consent, ValueError for server policy or a chat with
-    no project, and ActiveRunConflict for a folder in use.
+    from or a blank or over-long brief, DeviceNotConnectedToProject /
+    DeviceBoundToAnotherChat for a target outside the user's consent,
+    ValueError for server policy or a chat that is gone or has no project,
+    and ActiveRunConflict for a folder in use.
     """
+    owner = {
+        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+    }
     try:
-        # Lock the parent: concurrent calls for one tool call serialize here,
-        # so the existing-child lookup below is the idempotency key.
-        parent: Any = await db.scalar(
-            select(AgentRun)
-            .where(AgentRun.job_id == parent_run_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
+        # Lock the parent: concurrent calls for one tool call serialize here.
+        # uq_agent_runs_handoff_call is the last word if they do not.
+        parent: Any = await _lock_parent(db, parent_run_id)
         if (
             parent is None
             or parent.user_id != current_user.id
@@ -85,14 +141,21 @@ async def create_handoff_run(
         ):
             raise IntegrationAccessDenied()
         existing = await existing_handoff_run(
-            db, parent_run_id=parent_run_id, tool_call_id=tool_call_id
+            db, parent_run_id=parent_run_id, tool_call_id=tool_call_id, **owner
         )
         if existing is not None:
             await db.commit()
             return existing
-        if parent.status != JobStatus.RUNNING.value or not brief.strip():
+        # The user approves exactly the brief the card shows: refuse, never cut.
+        if (
+            parent.status != JobStatus.RUNNING.value
+            or not brief.strip()
+            or len(brief) > MAX_BRIEF_CHARS
+        ):
             raise IntegrationAccessDenied()
         thread = await get_thread_lean(db, parent.thread_id, current_user.id)
+        if thread is None:
+            raise ValueError("This chat is no longer available for a handoff.")
         context = await create_chat_context(
             db,
             current_user=current_user,
@@ -100,6 +163,17 @@ async def create_handoff_run(
             device_id=device_id,
             workspace_id=workspace_id,
         )
+        # The mint committed, which released the parent lock: take it again
+        # and recheck what may have changed meanwhile.
+        parent = await _lock_parent(db, parent_run_id)
+        if parent is None or parent.status != JobStatus.RUNNING.value:
+            raise IntegrationAccessDenied()
+        existing = await existing_handoff_run(
+            db, parent_run_id=parent_run_id, tool_call_id=tool_call_id, **owner
+        )
+        if existing is not None:
+            await db.commit()
+            return existing
         child_id = str(uuid4())
         child = AgentRun(
             job_id=child_id,
@@ -107,14 +181,14 @@ async def create_handoff_run(
             user_id=parent.user_id,
             thread_id=parent.thread_id,
             conversation_id=parent.conversation_id,
+            # The thread's project now (the grant was minted for it), which
+            # may differ from the project the parent turn started under.
             project_id=context.project_id,
             execution_provider="codex",
             status=JobStatus.QUEUED.value,
             parent_run_id=parent.job_id,
-            run_metadata={
-                "handoff_brief": brief[:MAX_BRIEF_CHARS],
-                "handoff_tool_call_id": tool_call_id,
-            },
+            handoff_tool_call_id=tool_call_id,
+            run_metadata={"handoff_brief": brief},
         )
         db.add(child)
         await db.flush()
@@ -146,13 +220,23 @@ async def create_handoff_run(
         )
         await db.commit()
         return child_id
-    except IntegrityError:
-        # uq_harness_active_workspace: another writer took the folder between
-        # the pre-check and the insert.
+    except IntegrityError as exc:
         await db.rollback()
-        raise ActiveRunConflict(
-            "A response already owns this local workspace."
-        ) from None
+        if _violates(exc, HANDOFF_CALL_INDEX):
+            # A concurrent call for the same tool call committed first.
+            winner = await existing_handoff_run(
+                db, parent_run_id=parent_run_id, tool_call_id=tool_call_id, **owner
+            )
+            await db.commit()
+            if winner is not None:
+                return winner
+            raise
+        if _violates(exc, ACTIVE_WORKSPACE_INDEX):
+            # Another writer took the folder between the pre-check and insert.
+            raise ActiveRunConflict(
+                "A response already owns this local workspace."
+            ) from None
+        raise
     except Exception:
         await db.rollback()
         raise

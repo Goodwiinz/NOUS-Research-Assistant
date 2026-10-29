@@ -7,50 +7,72 @@ otherwise mask a missing org or nested-parent guard:
 
 * removing the ``parent.status != RUNNING`` guard fails
   test_parent_must_be_running;
-* removing the existing-child lookup fails
-  test_creation_is_idempotent_by_tool_call_id (workspace 409 on the second
-  call);
+* removing both existing-child lookups fails
+  test_each_tool_call_has_its_own_child_and_replays_to_it (the replay mints
+  a grant before uq_agent_runs_handoff_call answers); removing them and the
+  index branch fails test_creation_is_idempotent_by_tool_call_id;
 * removing the parent ``user_id`` / ``organization_id`` comparison fails
   test_another_users_parent_is_refused / test_another_orgs_parent_is_refused;
 * removing the ``execution_provider != "nous"`` comparison fails
   test_a_top_level_codex_run_cannot_hand_off; removing the ``parent_run_id is
   not None`` comparison fails test_a_nested_nous_run_cannot_hand_off
   (test_a_child_cannot_hand_off_again needs both removed);
-* removing the blank-brief check fails test_blank_brief_is_refused;
-* removing the ``[:MAX_BRIEF_CHARS]`` cap fails test_brief_is_capped;
+* removing the blank-brief / over-long-brief checks fails
+  test_blank_brief_is_refused / test_over_long_brief_is_refused;
 * dropping the ``handoff_tool_call_id`` predicate from existing_handoff_run
-  fails test_locked_folder_is_refused (call-2 would return call-1's child);
+  fails test_each_tool_call_has_its_own_child_and_replays_to_it;
+* dropping its ``user_id`` / ``organization_id`` predicate fails
+  test_existing_child_lookup_is_scoped_to_its_owner;
+* disabling the uq_agent_runs_handoff_call branch fails
+  test_a_concurrent_creator_wins_and_its_child_is_returned; mapping every
+  IntegrityError to a workspace conflict fails
+  test_any_other_integrity_error_is_raised_as_is; never mapping it fails
+  test_a_folder_lost_at_insert_is_a_workspace_conflict;
+* removing the status recheck after the mint fails
+  test_a_parent_that_stopped_while_minting_is_refused;
 * removing ``not run.parent_run_id`` in prompt_context.build_harness_prompt
   fails test_prompt_context.test_a_brief_without_a_parent_run_is_refused.
 """
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
-from src.models.bridge_device import WorkspaceBinding
+from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
 from src.models.harness_session import HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.models.thread import Thread
-from src.schemas.integration_context import IntegrationContext
+from src.models.workspace import Workspace
+from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.agent_submission_service import accept_submission
 from src.services.agent.schemas import AgentExecuteRequest, AgentMessage
-from src.services.harness.handoff import MAX_BRIEF_CHARS, create_handoff_run
+from src.services.harness import handoff as handoff_service
+from src.services.harness.handoff import (
+    MAX_BRIEF_CHARS,
+    create_handoff_run,
+    existing_handoff_run,
+)
+from src.services.harness.runs import record_observation
 from src.services.integrations.context import (
     DeviceNotConnectedToProject,
     IntegrationAccessDenied,
+    create_request,
+    decide_request,
+    exchange_request,
 )
 from src.shared.enums import JobStatus
 from tests.unit.services.harness.test_runs import (  # noqa: F401
@@ -149,8 +171,8 @@ async def test_creates_a_queued_child_with_session_outbox_and_event(
     assert child.thread_id == THREAD and child.user_message_id is None
     assert child.project_id == PROJECT
     assert (child.user_id, child.organization_id) == (USER, ORG)
-    assert child.run_metadata["handoff_brief"] == BRIEF
-    assert child.run_metadata["handoff_tool_call_id"] == "call-1"
+    assert child.run_metadata == {"handoff_brief": BRIEF}
+    assert child.handoff_tool_call_id == "call-1"
     session = await db.scalar(
         select(HarnessSession).where(HarnessSession.run_id == child_id)
     )
@@ -286,12 +308,14 @@ async def test_blank_brief_is_refused(
     assert await children(db, parent) == 0
 
 
-async def test_brief_is_capped(db: AsyncSession, context: IntegrationContext) -> None:
+async def test_over_long_brief_is_refused(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    """The user approves exactly the brief the card shows: never truncated."""
     parent = await parent_run(db)
-    child_id = await handoff(db, parent, brief="x" * (MAX_BRIEF_CHARS + 500))
-    child = await db.get(AgentRun, child_id, populate_existing=True)
-    assert child is not None
-    assert child.run_metadata["handoff_brief"] == "x" * MAX_BRIEF_CHARS
+    await refused_before_minting(db, parent, brief="x" * (MAX_BRIEF_CHARS + 1))
+    assert await children(db, parent) == 0
+    assert await handoff(db, parent, brief="x" * MAX_BRIEF_CHARS)
 
 
 async def test_thread_without_a_project_is_refused(
@@ -359,3 +383,269 @@ async def test_locked_folder_is_refused(
     with pytest.raises(ActiveRunConflict):
         await handoff(db, first, call="call-2")
     assert await children(db, first) == 1
+
+
+async def grant_count(db: AsyncSession) -> int:
+    return int(await db.scalar(select(func.count()).select_from(IntegrationGrant)) or 0)
+
+
+async def outbox_count(db: AsyncSession) -> int:
+    return int(await db.scalar(select(func.count()).select_from(AgentOutbox)) or 0)
+
+
+async def second_project_folder(db: AsyncSession) -> UUID:
+    """Another free folder on DEVICE for the chat's own project."""
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=folder, project_id=PROJECT, label="repo2"
+        )
+    )
+    await db.commit()
+    return folder
+
+
+async def test_each_tool_call_has_its_own_child_and_replays_to_it(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    folder = await second_project_folder(db)
+    parent = await parent_run(db)
+    first = await handoff(db, parent, "call-1")
+    second = await handoff(db, parent, "call-2", workspace_id=folder)
+    assert first != second
+    grants = await grant_count(db)
+    assert await handoff(db, parent, "call-2", workspace_id=folder) == second
+    # A replay of call-1 with an edited target still returns call-1's child.
+    assert await handoff(db, parent, "call-1", workspace_id=folder) == first
+    assert await grant_count(db) == grants
+    assert await children(db, parent) == 2
+
+
+async def test_replay_after_the_child_finished_returns_it(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    parent = await parent_run(db)
+    child = await handoff(db, parent)
+    done = await record_observation(db, run_id=UUID(child), observation="completed")
+    assert done.status == "completed" and not done.workspace_locked
+    for status in (JobStatus.DELEGATED, JobStatus.RUNNING):
+        await db.execute(
+            update(AgentRun)
+            .where(AgentRun.job_id == parent)
+            .values(status=status.value)
+        )
+        await db.commit()
+    grants, rows = await grant_count(db), await outbox_count(db)
+    assert await handoff(db, parent) == child
+    assert (await grant_count(db), await outbox_count(db)) == (grants, rows)
+    assert await children(db, parent) == 1
+
+
+async def test_existing_child_lookup_is_scoped_to_its_owner(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    parent = await parent_run(db)
+    child = await handoff(db, parent)
+    key = {"parent_run_id": parent, "tool_call_id": "call-1"}
+    assert (
+        await existing_handoff_run(db, **key, user_id=USER, organization_id=ORG)
+        == child
+    )
+    assert (
+        await existing_handoff_run(db, **key, user_id=uuid4(), organization_id=ORG)
+        is None
+    )
+    assert (
+        await existing_handoff_run(db, **key, user_id=USER, organization_id=uuid4())
+        is None
+    )
+
+
+async def test_another_users_device_and_folder_are_refused(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    """Same organization, the other user's own consent: still not ours."""
+    other, other_ws, other_project = uuid4(), uuid4(), uuid4()
+    other_device, own_folder, rogue_folder = uuid4(), uuid4(), uuid4()
+    await db.execute(
+        text(
+            "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, 'other@example.test', 'unused', 'Other', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ),
+        {"id": str(other), "org": str(ORG)},
+    )
+    for row in (
+        Workspace(id=other_ws, name="o", owner_id=other, organization_id=ORG),
+        Collection(id=other_project, workspace_id=other_ws, name="op"),
+        BridgeDevice(id=other_device, user_id=other, organization_id=ORG, label="o"),
+    ):
+        db.add(row)
+        await db.flush()
+    db.add_all(
+        [
+            WorkspaceBinding(
+                device_id=other_device,
+                workspace_id=own_folder,
+                project_id=other_project,
+                label="theirs",
+            ),
+            # A folder on their device naming our project.
+            WorkspaceBinding(
+                device_id=other_device,
+                workspace_id=rogue_folder,
+                project_id=PROJECT,
+                label="rogue",
+            ),
+        ]
+    )
+    await db.commit()
+    them = SimpleNamespace(id=other, organization_id=ORG)
+    req = await create_request(
+        db,
+        them,
+        GrantRequestCreate(
+            project_id=other_project, device_id=other_device, scopes={"harness:execute"}
+        ),
+    )
+    await decide_request(db, them, req.id, True)
+    await exchange_request(db, them, req.id)
+    parent = await parent_run(db)
+    grants = await grant_count(db)
+    for call, folder in (("call-1", own_folder), ("call-2", rogue_folder)):
+        with pytest.raises(IntegrationAccessDenied):
+            await handoff(db, parent, call, device_id=other_device, workspace_id=folder)
+    assert await grant_count(db) == grants
+    assert await children(db, parent) == 0
+
+
+async def test_a_concurrent_creator_wins_and_its_child_is_returned(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lookup misses (the winner had not committed when this call read),
+    so the insert hits uq_agent_runs_handoff_call: return the winner."""
+    folder = await second_project_folder(db)
+    parent = await parent_run(db)
+    winner = await handoff(db, parent)
+    lookups: list[str | None] = []
+    real = handoff_service.existing_handoff_run
+
+    async def misses_before_insert(*args: Any, **kwargs: Any) -> str | None:
+        found = None if len(lookups) < 2 else await real(*args, **kwargs)
+        lookups.append(found)
+        return found
+
+    monkeypatch.setattr(handoff_service, "existing_handoff_run", misses_before_insert)
+    rows = await outbox_count(db)
+    assert await handoff(db, parent, workspace_id=folder) == winner
+    assert lookups == [None, None, winner]
+    assert await children(db, parent) == 1
+    assert await outbox_count(db) == rows
+    # The losing call's run grant was committed by the mint and is never
+    # attached to a session (the chat path behaves the same way).
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(HarnessSession)
+            .where(HarnessSession.workspace_id == folder)
+        )
+        == 0
+    )
+
+
+async def test_a_parent_that_stopped_while_minting_is_refused(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mint commits and so releases the parent lock; the status is
+    rechecked under a fresh lock before the child is written."""
+    parent = await parent_run(db)
+    real = handoff_service.create_chat_context
+
+    async def cancelled_meanwhile(*args: Any, **kwargs: Any) -> Any:
+        minted = await real(*args, **kwargs)
+        await db.execute(
+            update(AgentRun)
+            .where(AgentRun.job_id == parent)
+            .values(status=JobStatus.CANCELLED.value)
+        )
+        await db.commit()
+        return minted
+
+    monkeypatch.setattr(handoff_service, "create_chat_context", cancelled_meanwhile)
+    with pytest.raises(IntegrationAccessDenied):
+        await handoff(db, parent)
+    assert await children(db, parent) == 0
+
+
+def _integrity_error(message: str, constraint: str | None = None) -> IntegrityError:
+    orig: Exception = sqlite3.IntegrityError(message)
+    if constraint is not None:
+
+        class PgUniqueViolation(Exception):
+            constraint_name = constraint
+
+        orig = PgUniqueViolation("duplicate key value violates unique constraint")
+    return IntegrityError("INSERT", {}, orig)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _integrity_error(
+            "UNIQUE constraint failed: "
+            "harness_sessions.device_id, harness_sessions.workspace_id"
+        ),
+        _integrity_error("x", constraint="uq_harness_active_workspace"),
+    ],
+    ids=["sqlite", "postgres"],
+)
+async def test_a_folder_lost_at_insert_is_a_workspace_conflict(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    error: IntegrityError,
+) -> None:
+    async def lost(*args: Any, **kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(handoff_service, "reserve_workspace", lost)
+    parent = await parent_run(db)
+    with pytest.raises(ActiveRunConflict):
+        await handoff(db, parent)
+    assert await children(db, parent) == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _integrity_error(
+            "UNIQUE constraint failed: agent_outbox.run_id, agent_outbox.kind"
+        ),
+        _integrity_error("x", constraint="uq_agent_outbox_run_kind"),
+    ],
+    ids=["sqlite", "postgres"],
+)
+async def test_any_other_integrity_error_is_raised_as_is(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    error: IntegrityError,
+) -> None:
+    async def broken(*args: Any, **kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(handoff_service, "insert_outbox", broken)
+    parent = await parent_run(db)
+    with pytest.raises(IntegrityError) as raised:
+        await handoff(db, parent)
+    assert raised.value is error
+    assert await children(db, parent) == 0
+
+
+async def test_a_chat_no_longer_available_is_refused(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    parent = await parent_run(db)
+    await db.execute(update(Thread).where(Thread.id == THREAD).values(is_deleted=True))
+    await db.commit()
+    with pytest.raises(ValueError, match="no longer available"):
+        await handoff(db, parent)
+    assert await children(db, parent) == 0
