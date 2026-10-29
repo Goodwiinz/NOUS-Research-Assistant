@@ -361,6 +361,24 @@ async def test_awaiting_confirmation_respects_longer_window(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_delegated_handoff_parent_is_never_swept(session_factory):
+    """A handoff parent waits on its child Codex run with no time limit.
+
+    Mutation check: drop the ``DELEGATED`` skip in ``_sweep_stale_agent_runs``
+    and the parent is leased and failed as stale.
+    """
+    parent_id = await _seed(session_factory, status="delegated", updated_at=VERY_STALE)
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, parent_id))[0] == "delegated"
+    assert (await _lease(session_factory, parent_id))[0] is None  # never claimed
+    assert result["skipped"] == 1
+    assert result["failed"] == 0
+
+
+@pytest.mark.asyncio
 async def test_live_store_terminal_repairs_instead_of_failing(session_factory):
     """Projection missed the terminal write (fire-and-forget lost): the run
     actually completed — repair the projection, don't fail a finished run."""

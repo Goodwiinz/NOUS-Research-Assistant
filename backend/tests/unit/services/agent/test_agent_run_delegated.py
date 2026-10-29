@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event, insert
@@ -16,6 +17,7 @@ from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AGENT_RUN_STATUS_CHECK, AgentRun
 from src.models.thread import Thread
 from src.services.agent import agent_run_service, agent_submission_service
+from src.services.agent.agent_execution_service import _clear_stale_pending_confirmation
 from src.services.agent.agent_run_service import (
     ActiveRunConflict,
     HandoffInProgress,
@@ -242,3 +244,32 @@ async def test_new_turn_during_handoff_gets_the_notice(db: AsyncSession) -> None
     )
     run = await db.get(AgentRun, parent)
     assert run is not None and run.status == "delegated"  # never abandoned
+
+
+# ---------------------------------------------------------------------------
+# The stale-confirmation cleanup must not wipe a delegated turn's outcome
+# interrupt: only the resume drain answers it.
+#
+# Mutation check: drop the ``handoff_run_id`` early return in
+# ``_clear_stale_pending_confirmation`` and ``aupdate_state`` runs.
+# ---------------------------------------------------------------------------
+
+
+async def test_stale_confirmation_cleanup_keeps_a_handoff_interrupt() -> None:
+    interrupt = SimpleNamespace(value={"handoff_run_id": "child"})
+    snapshot = SimpleNamespace(
+        values={"messages": []},
+        tasks=(SimpleNamespace(interrupts=(interrupt,)),),
+    )
+
+    class Graph:
+        updated = False
+
+        async def aget_state(self, _config):  # type: ignore[no-untyped-def]
+            return snapshot
+
+        async def aupdate_state(self, *_a, **_k):  # type: ignore[no-untyped-def]
+            Graph.updated = True
+
+    assert await _clear_stale_pending_confirmation(Graph(), {}) is None
+    assert Graph.updated is False

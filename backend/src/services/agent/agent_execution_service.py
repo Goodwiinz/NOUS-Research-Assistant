@@ -893,6 +893,14 @@ async def _clear_stale_pending_confirmation(
     active_tasks = [t for t in (snapshot.tasks or ()) if getattr(t, "interrupts", None)]
     if not active_tasks:
         return None
+    if any(
+        isinstance(getattr(i, "value", None), dict) and "handoff_run_id" in i.value
+        for task in active_tasks
+        for i in task.interrupts
+    ):
+        # A delegated turn's outcome interrupt is only answered by the resume
+        # drain; a new turn is refused (HandoffInProgress) before reaching here.
+        return None
 
     # Extract tool names from the interrupt values so the drop is observable.
     dropped_tools: List[str] = []

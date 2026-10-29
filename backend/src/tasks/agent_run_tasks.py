@@ -405,6 +405,12 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                 if listed_status is None:
                     skipped += 1
                     continue
+                if listed_status is JobStatus.DELEGATED:
+                    # A handoff parent waits on its child Codex run with no
+                    # time limit (Stop cancels the child). The resume drain,
+                    # not this sweeper, moves it on.
+                    skipped += 1
+                    continue
                 if listed_status is JobStatus.AWAITING_CONFIRMATION and (
                     listed_updated_at is None or listed_updated_at >= awaiting_cutoff
                 ):
