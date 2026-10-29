@@ -118,9 +118,10 @@ def _active_index_def() -> Optional[str]:
     """``uq_agent_runs_active_thread``'s definition; None offline or if absent."""
     if op.get_context().as_sql:
         return None
-    return op.get_bind().scalar(
+    definition = op.get_bind().scalar(
         text(f"SELECT pg_get_indexdef(to_regclass('{_ACTIVE_INDEX}'))")
     )
+    return None if definition is None else str(definition)
 
 
 def _swap_active_thread_index(predicate: str) -> None:
