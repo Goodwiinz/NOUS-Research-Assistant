@@ -13,7 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import HARNESS_EXECUTE_KIND, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
@@ -369,7 +369,10 @@ async def lease_commands(
             # this command below: run, then accepted outbox, then commands.
             await db.scalars(
                 select(AgentOutbox)
-                .where(AgentOutbox.run_id == run.job_id)
+                .where(
+                    AgentOutbox.run_id == run.job_id,
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
+                )
                 .with_for_update()
             )
             commands = (

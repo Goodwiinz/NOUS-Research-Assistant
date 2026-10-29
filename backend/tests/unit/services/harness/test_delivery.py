@@ -343,6 +343,68 @@ async def test_queued_cancellation_before_dispatch_releases_workspace(
     assert terminal_event is not None and terminal_event.event_type == "run.cancelled"
 
 
+async def _outbox_rows(db: AsyncSession, run_id: str) -> dict[str, str]:
+    db.expire_all()
+    rows = await db.execute(
+        select(AgentOutbox.kind, AgentOutbox.status).where(AgentOutbox.run_id == run_id)
+    )
+    return {kind: status for kind, status in rows.all()}
+
+
+async def test_cancel_before_dispatch_retires_only_the_execute_row(
+    db: AsyncSession, context: IntegrationContext, external_run: Any
+) -> None:
+    """A run can hold a second outbox row (a finished handoff child's
+    ``handoff.resume``); cancelling an undelivered start fails only its
+    ``harness.execute`` intent. The run is top-level here so finalize writes
+    no resume row of its own. Mutation: drop the ``AgentOutbox.kind ==
+    HARNESS_EXECUTE_KIND`` clause from runs.cancel_undelivered_start's
+    outbox SELECT and the resume row reads ``failed``."""
+    run_id = str(external_run.id)
+    db.add(AgentOutbox(run_id=run_id, organization_id=ORG, kind="handoff.resume"))
+    await db.commit()
+
+    await cancel(db, run_id)
+
+    assert (await db.get(AgentRun, run_id)).status == JobStatus.CANCELLED.value
+    assert await _outbox_rows(db, run_id) == {
+        "harness.execute": AgentOutboxStatus.FAILED.value,
+        "handoff.resume": AgentOutboxStatus.PENDING.value,
+    }
+
+
+async def test_poll_locks_only_the_execute_outbox_row(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lease_commands locks run, then its accepted outbox row, then commands.
+    It must not also lock a ``handoff.resume`` row, which the resume drain
+    claims. SQLite has no row locks, so this checks the statement itself.
+    Mutation: drop the ``AgentOutbox.kind == HARNESS_EXECUTE_KIND`` clause
+    from that lock in delivery.lease_commands and this fails."""
+    seen: list[Any] = []
+    real_scalars = db.scalars
+
+    async def scalars(statement: Any, *args: Any, **kwargs: Any) -> Any:
+        seen.append(statement)
+        return await real_scalars(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "scalars", scalars)
+
+    await lease_commands(db, context, DEVICE)
+
+    outbox_filters = [
+        str(stmt.whereclause)
+        for stmt in seen
+        if AgentOutbox.__table__ in getattr(stmt, "froms", [])
+    ]
+    assert outbox_filters, "the poll no longer locks the outbox row"
+    for where in outbox_filters:
+        assert "agent_outbox.kind" in where, where
+
+
 @pytest.mark.parametrize("failure", ["revoked_grant", "missing_message"])
 async def test_undeliverable_outbox_fails_run_and_releases_workspace(
     db: AsyncSession,

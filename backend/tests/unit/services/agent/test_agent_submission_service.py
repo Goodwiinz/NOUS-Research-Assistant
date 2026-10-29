@@ -187,6 +187,78 @@ async def test_idempotent_retry_returns_existing_run(db: AsyncSession) -> None:
     assert await _count(db, AgentOutbox) == 1
 
 
+# ---------------------------------------------------------------------------
+# A run can hold a second outbox row (a finished handoff child's
+# ``handoff.resume``); reads of "the run's dispatch record" filter on kind.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dispatch_kind", ["agent.stream.execute", "harness.execute"])
+async def test_existing_outbox_id_ignores_the_resume_row(
+    db: AsyncSession, dispatch_kind: str
+) -> None:
+    """Mutation: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
+    ``_existing_outbox_id`` and this fails (MultipleResultsFound, or the
+    resume row's id returned as the dispatch record)."""
+    run_id = str(uuid.uuid4())
+    db.add(AgentRun(job_id=run_id, status=JobStatus.COMPLETED.value))
+    await db.flush()
+    # The resume row goes in first, so an unfiltered read meets it first.
+    resume = AgentOutbox(run_id=run_id, kind=submission_mod.HANDOFF_RESUME_KIND)
+    db.add(resume)
+    await db.flush()
+    dispatch = AgentOutbox(run_id=run_id, kind=dispatch_kind)
+    db.add(dispatch)
+    await db.commit()
+
+    assert await submission_mod._existing_outbox_id(db, run_id) == str(dispatch.id)
+
+
+async def test_fail_queued_submission_leaves_a_resume_row_alone(
+    db: AsyncSession,
+) -> None:
+    """Retiring the dispatch intent must not retire another kind's row.
+    Mutation: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
+    ``fail_queued_submission``'s outbox UPDATE; the resume row then reads
+    ``failed``."""
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    db.add(
+        AgentOutbox(
+            run_id=accepted.run_id,
+            organization_id=ORG_A,
+            kind=submission_mod.HANDOFF_RESUME_KIND,
+        )
+    )
+    await db.commit()
+
+    assert await submission_mod.fail_queued_submission(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        error_code="stream_not_dispatched",
+        error="not started",
+        payload={"code": "stream_not_dispatched", "message": "not started"},
+    )
+
+    rows = dict(
+        (
+            await db.execute(
+                select(AgentOutbox.kind, AgentOutbox.status).where(
+                    AgentOutbox.run_id == accepted.run_id
+                )
+            )
+        ).all()
+    )
+    assert rows == {
+        submission_mod.DISPATCH_KIND_STREAM: AgentOutboxStatus.FAILED.value,
+        submission_mod.HANDOFF_RESUME_KIND: AgentOutboxStatus.PENDING.value,
+    }
+
+
 async def test_idempotency_race_attaches_to_the_winner(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

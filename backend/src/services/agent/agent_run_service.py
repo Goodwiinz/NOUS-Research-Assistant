@@ -36,7 +36,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import DISPATCH_KINDS, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
@@ -666,6 +666,7 @@ async def terminalize_stale_run(
                 update(AgentOutbox)
                 .where(
                     AgentOutbox.run_id == job_id,
+                    AgentOutbox.kind.in_(DISPATCH_KINDS),
                     AgentOutbox.status == AgentOutboxStatus.PENDING.value,
                 )
                 .values(

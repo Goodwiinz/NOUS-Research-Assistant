@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import HARNESS_EXECUTE_KIND, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import WorkspaceBinding
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
@@ -226,7 +226,12 @@ async def cancel_undelivered_start(db: AsyncSession, *, run_id: str) -> bool:
         return False
     outboxes = (
         await db.scalars(
-            select(AgentOutbox).where(AgentOutbox.run_id == run_id).with_for_update()
+            select(AgentOutbox)
+            .where(
+                AgentOutbox.run_id == run_id,
+                AgentOutbox.kind == HARNESS_EXECUTE_KIND,
+            )
+            .with_for_update()
         )
     ).all()
     commands = (

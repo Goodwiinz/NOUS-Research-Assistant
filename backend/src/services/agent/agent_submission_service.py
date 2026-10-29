@@ -81,7 +81,12 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import (
+    DISPATCH_KIND_STREAM,
+    DISPATCH_KINDS,
+    HARNESS_EXECUTE_KIND,
+    AgentOutbox,
+)
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.chat_message import ChatMessage, MessageRole
@@ -105,10 +110,10 @@ from src.shared.enums import TERMINAL_JOB_STATUSES, AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 
-# Dispatch kind for a turn executed in-process by the SSE stream generator.
-# Free-form by design (see the model docstring): a relay dispatching to another
-# backend must be addable without a migration.
-DISPATCH_KIND_STREAM = "agent.stream.execute"
+# Dispatch kinds (DISPATCH_KIND_STREAM, HARNESS_EXECUTE_KIND) live with the
+# model so agent_run_service and the harness services can filter on them
+# without importing this module. Free-form by design (see the model
+# docstring): a new one is a constant there, not a migration.
 
 # A finished machine-handoff child's promise to resume its parent's graph.
 # Keyed by the CHILD run id (uq_agent_outbox_run_kind) so one parent can hand
@@ -222,8 +227,14 @@ async def _find_by_idempotency_key(
 
 
 async def _existing_outbox_id(db: AsyncSession, run_id: str) -> Optional[str]:
-    """The dispatch record for *run_id* (keyed by a server-generated id)."""
-    stmt = select(AgentOutbox.id).where(AgentOutbox.run_id == run_id).limit(1)
+    """The dispatch record for *run_id* (keyed by a server-generated id).
+
+    Filtered on the dispatch kinds: a finished handoff child also holds a
+    ``handoff.resume`` row, which is not the record a replay reports.
+    """
+    stmt = select(AgentOutbox.id).where(
+        AgentOutbox.run_id == run_id, AgentOutbox.kind.in_(DISPATCH_KINDS)
+    )
     found = (await db.execute(stmt)).scalar_one_or_none()
     return str(found) if found is not None else None
 
@@ -724,6 +735,7 @@ async def fail_queued_submission(
             update(AgentOutbox)
             .where(
                 AgentOutbox.run_id == run_id,
+                AgentOutbox.kind.in_(DISPATCH_KINDS),
                 AgentOutbox.organization_id == _coerce_uuid(organization_id),
                 AgentOutbox.status == AgentOutboxStatus.PENDING.value,
             )
@@ -1072,7 +1084,7 @@ async def accept_submission(
             db,
             run_id=job_id,
             organization_id=organization_id,
-            kind="harness.execute" if provider == "codex" else kind,
+            kind=HARNESS_EXECUTE_KIND if provider == "codex" else kind,
             payload={
                 "execution_provider": provider,
                 "thread_id": str(thread_uuid),
