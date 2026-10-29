@@ -802,6 +802,23 @@ async def _insert_outbox(
     return record
 
 
+async def insert_outbox(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    organization_id: Any,
+    kind: str,
+    payload: dict[str, Any],
+) -> AgentOutbox:
+    """Public entry for other services to write an outbox record. Does NOT commit.
+
+    Same contract as ``_insert_outbox``; the caller owns the transaction.
+    """
+    return await _insert_outbox(
+        db, run_id=run_id, organization_id=organization_id, kind=kind, payload=payload
+    )
+
+
 async def accept_submission(
     db: AsyncSession,
     *,
@@ -1408,6 +1425,7 @@ __all__ = [
     "accept_submission",
     "fail_queued_submission",
     "finalize_submission",
+    "insert_outbox",
     "mark_submission_dispatched",
     "request_run_cancellation",
     "stream_idempotency_key",
