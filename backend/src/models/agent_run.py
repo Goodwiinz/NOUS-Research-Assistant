@@ -51,6 +51,13 @@ AGENT_RUN_STATUS_CHECK = (
     "status IN (" + ", ".join(f"'{s.value}'" for s in JobStatus) + ")"
 )
 
+# Shared with the mh01 migration so the predicate has one source.
+AGENT_RUN_ACTIVE_THREAD_PREDICATE = (
+    "thread_id IS NOT NULL AND parent_run_id IS NULL AND status IN "
+    "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering', "
+    "'delegated')"
+)
+
 
 class AgentRun(Base):
     """One row per agent execution job (job_id from ``POST /agent/execute``)."""
@@ -98,6 +105,15 @@ class AgentRun(Base):
 
     execution_provider = Column(
         String(16), nullable=False, default="nous", server_default="nous"
+    )
+
+    # Machine handoff: a child Codex run started by a NOUS run's graph. Child
+    # runs share the parent's thread but never hold its single-writer slot and
+    # never write their own assistant row (services/harness/handoff.py).
+    parent_run_id = Column(
+        String(36),
+        ForeignKey("agent_runs.job_id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     # Lifecycle status; values constrained to the JobStatus domain.
@@ -170,21 +186,18 @@ class AgentRun(Base):
             postgresql_where=text("idempotency_key IS NOT NULL"),
             sqlite_where=text("idempotency_key IS NOT NULL"),
         ),
-        # One non-terminal run per thread — the concurrency invariant the run
-        # API converts into a conflict instead of starting a second writer.
+        # One non-terminal top-level run per thread — the concurrency invariant
+        # the run API converts into a conflict instead of starting a second
+        # writer. Child runs (machine handoff) are excluded: their parent holds
+        # the slot as ``delegated``.
         Index(
             "uq_agent_runs_active_thread",
             "thread_id",
             unique=True,
-            postgresql_where=text(
-                "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
-            ),
-            sqlite_where=text(
-                "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
-            ),
+            postgresql_where=text(AGENT_RUN_ACTIVE_THREAD_PREDICATE),
+            sqlite_where=text(AGENT_RUN_ACTIVE_THREAD_PREDICATE),
         ),
+        Index("idx_agent_runs_parent", "parent_run_id"),
         CheckConstraint(
             "execution_provider IN ('nous', 'codex')", name="ck_agent_runs_provider"
         ),

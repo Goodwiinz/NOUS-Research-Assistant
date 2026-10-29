@@ -8,7 +8,7 @@ producing a second one.
 
 Everything runs against SQLite, which carries the same partial unique indexes
 the accept path depends on (``uq_agent_runs_user_idempotency_key``,
-``uq_agent_runs_active_thread``, ``uq_agent_outbox_run``) because the models
+``uq_agent_runs_active_thread``, ``uq_agent_outbox_run_kind``) because the models
 declare ``sqlite_where`` alongside ``postgresql_where``. True cross-connection
 contention needs PostgreSQL; the race is therefore driven deterministically by
 suppressing the pre-insert lookup, which is exactly the state a losing racer

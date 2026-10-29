@@ -1,10 +1,11 @@
 """Transactional-outbox record of an agent run's dispatch intent (P0-C).
 
-One row per accepted submission, written in the SAME transaction as the user
-message, the ``agent_runs`` row and the run's ``run.created`` event. That is
-the whole point: a client that received an ``accepted`` frame is guaranteed a
-durable record that the run was meant to be dispatched, so a crash between
-acceptance and execution is recoverable instead of silently lost.
+One dispatch row per accepted submission, plus one ``handoff.resume`` row per
+finished handoff child. The dispatch row is written in the SAME transaction as
+the user message, the ``agent_runs`` row and the run's ``run.created`` event.
+That is the whole point: a client that received an ``accepted`` frame is
+guaranteed a durable record that the run was meant to be dispatched, so a
+crash between acceptance and execution is recoverable instead of silently lost.
 
 **Scope of this table today: a durable intent record only.** Dispatch itself
 still happens exactly as it did before — the ``/stream`` path runs the graph
@@ -79,10 +80,11 @@ class AgentOutbox(BaseModel):
         # org's pending dispatches).
         Index("idx_agent_outbox_run", "run_id"),
         Index("idx_agent_outbox_org_status", "organization_id", "status"),
-        # Exactly one dispatch intent per run: the accept transaction writes it
-        # once, and a retried submission resolves to the existing run (and
-        # therefore the existing row) instead of queueing a second dispatch.
-        Index("uq_agent_outbox_run", "run_id", unique=True),
+        # One dispatch intent per run and kind: the accept transaction writes
+        # the run's own dispatch row once, and a finished handoff child gets
+        # exactly one ``handoff.resume`` row (finalize_submission). A retried
+        # submission resolves to the existing run instead of a second row.
+        Index("uq_agent_outbox_run_kind", "run_id", "kind", unique=True),
         CheckConstraint(AGENT_OUTBOX_STATUS_CHECK, name="ck_agent_outbox_status"),
     )
 
