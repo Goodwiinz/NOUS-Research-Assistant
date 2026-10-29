@@ -110,7 +110,8 @@ class AgentRun(Base):
 
     # Machine handoff: a child Codex run started by a NOUS run's graph. Child
     # runs share the parent's thread but never hold its single-writer slot and
-    # never write their own assistant row (services/harness/handoff.py).
+    # never write their own assistant row (the handoff service lands in a
+    # later PR of the machine-handoff plan).
     parent_run_id = Column(
         String(36),
         ForeignKey(

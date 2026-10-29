@@ -82,6 +82,8 @@ async def test_child_may_run_while_parent_delegated(db: AsyncSession) -> None:
             **_run("running", parent=parent["job_id"], provider="codex")
         )
     )
+    # Passes by not raising IntegrityError: the child is exempt from the
+    # active-thread index while its parent holds the slot.
     await db.commit()
 
 
@@ -247,15 +249,18 @@ async def test_new_turn_during_handoff_gets_the_notice(db: AsyncSession) -> None
 
 
 # ---------------------------------------------------------------------------
-# The stale-confirmation cleanup must not wipe a delegated turn's outcome
-# interrupt: only the resume drain answers it.
+# A leftover handoff interrupt is cleared like any other stale interrupt.
+# Every caller of the cleanup already holds the thread slot, and a new turn is
+# refused while the parent is ``delegated`` (HandoffInProgress), so the cleanup
+# only sees a handoff interrupt after the parent ended without resuming it.
+# Keeping it alive would re-fire it and block every later turn on the thread.
 #
-# Mutation check: drop the ``handoff_run_id`` early return in
-# ``_clear_stale_pending_confirmation`` and ``aupdate_state`` runs.
+# Mutation check: add a ``handoff_run_id`` early return to
+# ``_clear_stale_pending_confirmation`` and ``aupdate_state`` never runs.
 # ---------------------------------------------------------------------------
 
 
-async def test_stale_confirmation_cleanup_keeps_a_handoff_interrupt() -> None:
+async def test_stale_confirmation_cleanup_clears_a_leftover_handoff_interrupt() -> None:
     interrupt = SimpleNamespace(value={"handoff_run_id": "child"})
     snapshot = SimpleNamespace(
         values={"messages": []},
@@ -263,13 +268,14 @@ async def test_stale_confirmation_cleanup_keeps_a_handoff_interrupt() -> None:
     )
 
     class Graph:
-        updated = False
+        updated: dict | None = None
 
         async def aget_state(self, _config):  # type: ignore[no-untyped-def]
             return snapshot
 
-        async def aupdate_state(self, *_a, **_k):  # type: ignore[no-untyped-def]
-            Graph.updated = True
+        async def aupdate_state(self, _config, values):  # type: ignore[no-untyped-def]
+            Graph.updated = values
 
-    assert await _clear_stale_pending_confirmation(Graph(), {}) is None
-    assert Graph.updated is False
+    assert await _clear_stale_pending_confirmation(Graph(), {}) is not None
+    assert Graph.updated is not None
+    assert Graph.updated["pending_confirmation"] == {}
