@@ -59,6 +59,15 @@ class ActiveRunConflict(RuntimeError):
     """A non-terminal run already owns the thread's single-writer slot."""
 
 
+class HandoffInProgress(ActiveRunConflict):
+    """The thread's turn is paused on a child Codex run (machine handoff)."""
+
+    client_message = "Codex is still working: cancel it or wait."
+
+    def __init__(self) -> None:
+        super().__init__(self.client_message)
+
+
 class RunStatusProjectionRejected(RuntimeError):
     """The durable row rejected a requested job-status projection."""
 

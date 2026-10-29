@@ -11,16 +11,19 @@ from sqlalchemy import event, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.api.agent.streaming import _stream_failure_message
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AGENT_RUN_STATUS_CHECK, AgentRun
 from src.models.thread import Thread
 from src.services.agent import agent_run_service, agent_submission_service
 from src.services.agent.agent_run_service import (
     ActiveRunConflict,
+    HandoffInProgress,
     get_active_run_for_thread,
     get_latest_run_for_thread,
     upsert_run,
 )
+from src.services.agent.agent_submission_service import _ensure_thread_idle
 from src.shared.enums import JobStatus
 
 pytestmark = pytest.mark.unit
@@ -219,3 +222,23 @@ async def test_thread_idle_check_sees_the_parent_only(db: AsyncSession) -> None:
         await agent_submission_service._ensure_thread_idle(
             db, thread_id=THREAD, user_id=USER
         )
+
+
+# ---------------------------------------------------------------------------
+# A new turn during a handoff is refused with the notice, never abandoning the
+# delegated parent (the owner's "blocked with a notice" decision).
+#
+# Mutation check: drop the ``DELEGATED`` branch in ``_ensure_thread_idle`` and
+# this test fails with a plain ``ActiveRunConflict``.
+# ---------------------------------------------------------------------------
+
+
+async def test_new_turn_during_handoff_gets_the_notice(db: AsyncSession) -> None:
+    parent, _child = await _family(db)
+    with pytest.raises(HandoffInProgress) as raised:
+        await _ensure_thread_idle(db, thread_id=THREAD, user_id=USER)
+    assert _stream_failure_message(raised.value) == (
+        "Codex is still working: cancel it or wait."
+    )
+    run = await db.get(AgentRun, parent)
+    assert run is not None and run.status == "delegated"  # never abandoned
