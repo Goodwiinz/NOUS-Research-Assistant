@@ -10,6 +10,7 @@ Server side of the external coding-agent harness (the local bridge in `packages/
 | `delivery.py` | Durable bridge delivery: commands, dedupe and lifecycle live in PostgreSQL, so delivery is safe across workers and retried by `backend/src/tasks/harness_dispatch.py`. |
 | `approvals.py` | Owner-mediated, one-shot decisions for exact live Codex callbacks. |
 | `prompt_context.py` | Bounded canonical same-thread input for fresh native Codex sessions. |
+| `chat_context.py` | Mints a chat's Codex run grant from prior browser-approved consent (re-exported by `api/agent/harness_streaming.py`). |
 
 ## Related code
 
