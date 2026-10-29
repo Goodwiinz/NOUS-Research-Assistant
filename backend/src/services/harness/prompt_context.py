@@ -69,7 +69,9 @@ async def build_harness_prompt(db: AsyncSession, *, run_id: str) -> HarnessPromp
     if brief is not None:
         # Machine handoff: the NOUS agent wrote a task brief; the chat history
         # stays with NOUS. The digest pins the exact input for prompt_is_current.
-        if not isinstance(brief, str) or not brief.strip():
+        # Only a handoff child (created by services/harness/handoff.py, with a
+        # parent) may run from a brief instead of its accepted user message.
+        if not run.parent_run_id or not isinstance(brief, str) or not brief.strip():
             raise IntegrationAccessDenied()
         value = HANDOFF_PREFIX + brief
         if len(value) > MAX_INPUT_CHARS:

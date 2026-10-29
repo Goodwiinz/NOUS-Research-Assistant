@@ -1467,3 +1467,30 @@ async def test_an_account_caller_that_names_no_project_is_a_plain_denial(
             thread_id=THREAD_B,
             project_id=PROJECT_B,
         )
+
+
+async def test_account_pairing_child_uses_account_folder(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """A handoff child may run in an account folder (no project of its own):
+    its run grant is minted from the account approval for the chat's project."""
+    from src.services.harness.handoff import create_handoff_run
+    from tests.unit.services.harness.test_handoff import parent_run
+
+    parent = await parent_run(db)
+    child_id = await create_handoff_run(
+        db,
+        parent_run_id=parent,
+        current_user=OWNER,
+        tool_call_id="call-1",
+        brief="Run the tests and fix the failures.",
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=FOLDER_A,
+    )
+    run, session = await _run_and_session(db, child_id)
+    assert run.parent_run_id == parent and run.project_id == PROJECT
+    assert session.workspace_id == FOLDER_A and session.workspace_locked
+    grant = await db.get(IntegrationGrant, session.grant_id)
+    assert grant is not None and grant.project_id == PROJECT
+    assert grant.binding_kind == "project" and grant.request_id == account.consent_id
+    assert grant.thread_id == THREAD and grant.device_id == ACCOUNT_DEVICE
