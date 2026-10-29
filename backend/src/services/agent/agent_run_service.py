@@ -1029,9 +1029,16 @@ async def list_stale_runs(
     The sweeper (next PR) lists candidates here, then ``claim_lease``s each —
     the atomic per-row claim makes the list-then-claim pattern race-safe.
     System API — cross-tenant by design.
+
+    ``delegated`` handoff parents are never candidates: they wait on their
+    child Codex run with no time limit (Stop cancels the child; the resume
+    drain moves them on), and listing them would let long-waiting parents
+    fill the oldest-first batch and starve the sweeper of real stale runs.
     """
     now = now or _utcnow()
-    non_terminal = [s.value for s in JobStatus if not s.is_terminal]
+    non_terminal = [
+        s.value for s in JobStatus if not s.is_terminal and s is not JobStatus.DELEGATED
+    ]
     stmt = (
         select(AgentRun)
         .where(
