@@ -51,6 +51,19 @@ AGENT_RUN_STATUS_CHECK = (
     "status IN (" + ", ".join(f"'{s.value}'" for s in JobStatus) + ")"
 )
 
+# mh01_machine_handoff repeats this text literally (migrations never import
+# models); tests/unit/test_machine_handoff_migration.py keeps them equal.
+AGENT_RUN_ACTIVE_THREAD_PREDICATE = (
+    "thread_id IS NOT NULL AND parent_run_id IS NULL AND status IN "
+    "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering', "
+    "'delegated')"
+)
+
+# One child run per (parent run, tool call); repeated literally in mh01 too.
+AGENT_RUN_HANDOFF_CALL_PREDICATE = (
+    "parent_run_id IS NOT NULL AND handoff_tool_call_id IS NOT NULL"
+)
+
 
 class AgentRun(Base):
     """One row per agent execution job (job_id from ``POST /agent/execute``)."""
@@ -99,6 +112,24 @@ class AgentRun(Base):
     execution_provider = Column(
         String(16), nullable=False, default="nous", server_default="nous"
     )
+
+    # Machine handoff: a child Codex run started by a NOUS run's graph. Child
+    # runs share the parent's thread but never hold its single-writer slot and
+    # never write their own assistant row (the handoff service lands in a
+    # later PR of the machine-handoff plan).
+    parent_run_id = Column(
+        String(36),
+        ForeignKey(
+            "agent_runs.job_id",
+            name="fk_agent_runs_parent_run_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    # The parent graph's tool call that started this child: the handoff's
+    # idempotency key, unique per parent (uq_agent_runs_handoff_call). 255
+    # like chat_messages.tool_call_id; provider ids are far shorter.
+    handoff_tool_call_id = Column(String(255), nullable=True)
 
     # Lifecycle status; values constrained to the JobStatus domain.
     status = Column(String(32), nullable=False)
@@ -170,20 +201,27 @@ class AgentRun(Base):
             postgresql_where=text("idempotency_key IS NOT NULL"),
             sqlite_where=text("idempotency_key IS NOT NULL"),
         ),
-        # One non-terminal run per thread — the concurrency invariant the run
-        # API converts into a conflict instead of starting a second writer.
+        # One non-terminal top-level run per thread — the concurrency invariant
+        # the run API converts into a conflict instead of starting a second
+        # writer. Child runs (machine handoff) are excluded: their parent holds
+        # the slot as ``delegated``.
         Index(
             "uq_agent_runs_active_thread",
             "thread_id",
             unique=True,
-            postgresql_where=text(
-                "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
-            ),
-            sqlite_where=text(
-                "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
-            ),
+            postgresql_where=text(AGENT_RUN_ACTIVE_THREAD_PREDICATE),
+            sqlite_where=text(AGENT_RUN_ACTIVE_THREAD_PREDICATE),
+        ),
+        Index("idx_agent_runs_parent", "parent_run_id"),
+        # A second child for the same parent tool call is impossible, whatever
+        # later writes do to run_metadata.
+        Index(
+            "uq_agent_runs_handoff_call",
+            "parent_run_id",
+            "handoff_tool_call_id",
+            unique=True,
+            postgresql_where=text(AGENT_RUN_HANDOFF_CALL_PREDICATE),
+            sqlite_where=text(AGENT_RUN_HANDOFF_CALL_PREDICATE),
         ),
         CheckConstraint(
             "execution_provider IN ('nous', 'codex')", name="ck_agent_runs_provider"
