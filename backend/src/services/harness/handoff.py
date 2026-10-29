@@ -21,7 +21,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.agent_run import AgentRun
-from src.services.agent.agent_run_service import ActiveRunConflict
+from src.services.agent.agent_run_service import (
+    ActiveRunConflict,
+    integrity_constraint_name,
+)
 from src.services.agent.agent_submission_service import insert_outbox
 from src.services.agent.run_event_store import append_event
 from src.services.agent.run_event_types import RunEventType
@@ -32,6 +35,9 @@ from src.services.threads.workspace_access import get_thread_lean
 from src.shared.enums import JobStatus
 
 MAX_BRIEF_CHARS = 8000
+# agent_runs.handoff_tool_call_id is VARCHAR(255): PostgreSQL would raise a
+# DataError (SQLite stores anything), so a longer id is refused up front.
+MAX_TOOL_CALL_ID_CHARS = 255
 HANDOFF_CALL_INDEX = "uq_agent_runs_handoff_call"
 ACTIVE_WORKSPACE_INDEX = "uq_harness_active_workspace"
 # SQLite does not name a partial unique index on IntegrityError; these exact
@@ -48,25 +54,9 @@ _SQLITE_KEY_MESSAGES = {
 }
 
 
-def _constraint_name(exc: IntegrityError) -> str | None:
-    """The driver-reported constraint name (asyncpg / psycopg), if any."""
-    current: Any = exc
-    seen: list[Any] = []
-    for _ in range(5):
-        if current is None or current in seen:
-            break
-        seen.append(current)
-        for source in (current, getattr(current, "diag", None)):
-            name = getattr(source, "constraint_name", None)
-            if name:
-                return str(name)
-        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
-    return None
-
-
 def _violates(exc: IntegrityError, index: str) -> bool:
     """Whether ``exc`` is a collision on exactly ``index``."""
-    name = _constraint_name(exc)
+    name = integrity_constraint_name(exc)
     if name is not None:
         return name == index
     return _SQLITE_KEY_MESSAGES[index] in str(exc.orig).lower()
@@ -122,7 +112,12 @@ async def create_handoff_run(
     DeviceBoundToAnotherChat for a target outside the user's consent,
     ValueError for server policy or a chat that is gone or has no project,
     and ActiveRunConflict for a folder in use.
+
+    The caller's session must have no pending work: the grant mint inside
+    ``create_chat_context`` commits, and every refusal rolls back.
     """
+    if not tool_call_id or len(tool_call_id) > MAX_TOOL_CALL_ID_CHARS:
+        raise IntegrationAccessDenied()
     owner = {
         "user_id": current_user.id,
         "organization_id": current_user.organization_id,

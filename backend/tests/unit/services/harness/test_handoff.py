@@ -28,6 +28,11 @@ otherwise mask a missing org or nested-parent guard:
   IntegrityError to a workspace conflict fails
   test_any_other_integrity_error_is_raised_as_is; never mapping it fails
   test_a_folder_lost_at_insert_is_a_workspace_conflict;
+* dropping the empty or the >255-char tool_call_id check fails
+  test_an_unusable_tool_call_id_is_refused[empty] / [over-255];
+* making agent_run_service.integrity_constraint_name ignore ``__cause__``, or
+  handoff ignore the driver name, fails
+  test_a_folder_lost_at_insert_is_a_workspace_conflict[postgres];
 * removing the status recheck after the mint fails
   test_a_parent_that_stopped_while_minting_is_refused;
 * removing ``not run.parent_run_id`` in prompt_context.build_harness_prompt
@@ -308,6 +313,18 @@ async def test_blank_brief_is_refused(
     assert await children(db, parent) == 0
 
 
+@pytest.mark.parametrize("call", ["", "c" * 256], ids=["empty", "over-255"])
+async def test_an_unusable_tool_call_id_is_refused(
+    db: AsyncSession, context: IntegrationContext, call: str
+) -> None:
+    """agent_runs.handoff_tool_call_id is VARCHAR(255); PostgreSQL would raise
+    a DataError that SQLite never shows, so the id is refused up front."""
+    parent = await parent_run(db)
+    await refused_before_minting(db, parent, call=call)
+    assert await children(db, parent) == 0
+    assert await handoff(db, parent, "c" * 255)
+
+
 async def test_over_long_brief_is_refused(
     db: AsyncSession, context: IntegrationContext
 ) -> None:
@@ -575,14 +592,24 @@ async def test_a_parent_that_stopped_while_minting_is_refused(
     assert await children(db, parent) == 0
 
 
+class AsyncpgUniqueViolationError(Exception):
+    """asyncpg's driver error: it alone carries ``constraint_name``."""
+
+    def __init__(self, constraint: str) -> None:
+        super().__init__("duplicate key value violates unique constraint")
+        self.constraint_name = constraint
+
+
+class AdaptedIntegrityError(Exception):
+    """SQLAlchemy's asyncpg adapter error (``IntegrityError.orig``): no name of
+    its own; the driver error is its ``__cause__``."""
+
+
 def _integrity_error(message: str, constraint: str | None = None) -> IntegrityError:
     orig: Exception = sqlite3.IntegrityError(message)
     if constraint is not None:
-
-        class PgUniqueViolation(Exception):
-            constraint_name = constraint
-
-        orig = PgUniqueViolation("duplicate key value violates unique constraint")
+        orig = AdaptedIntegrityError(f"<class 'UniqueViolationError'>: {message}")
+        orig.__cause__ = AsyncpgUniqueViolationError(constraint)
     return IntegrityError("INSERT", {}, orig)
 
 
