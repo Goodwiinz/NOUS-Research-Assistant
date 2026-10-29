@@ -1157,7 +1157,30 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `backend/src/services/harness/handoff.py`.
+- Modify: `backend/src/services/agent/agent_submission_service.py`. Add a public `insert_outbox` next to `_insert_outbox` (`:770`), and list it in `__all__` (`:1393`).
 - Test: `backend/tests/unit/services/harness/test_handoff.py` (new; SQLite over the `test_runs.py` fixtures).
+
+**Service boundary (2026-10-29, PR #2061 review).** Harness modules import only the public API of `agent_submission_service`; on develop that is `finalize_submission`. `handoff.py` must not import the private `_insert_outbox`. Add this public wrapper instead, and have `handoff.py` import it:
+
+```python
+async def insert_outbox(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    organization_id: Any,
+    kind: str,
+    payload: dict[str, Any],
+) -> AgentOutbox:
+    """Public entry for other services to write an outbox record. Does NOT commit.
+
+    Same contract as ``_insert_outbox``; the caller owns the transaction.
+    """
+    return await _insert_outbox(
+        db, run_id=run_id, organization_id=organization_id, kind=kind, payload=payload
+    )
+```
+
+`finalize_submission` lives in the same module, so it keeps calling `_insert_outbox` directly.
 
 **Step 1: Failing tests**
 
@@ -1362,7 +1385,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.agent_run import AgentRun
 from src.services.agent.agent_run_service import ActiveRunConflict
-from src.services.agent.agent_submission_service import _insert_outbox
+from src.services.agent.agent_submission_service import insert_outbox
 from src.services.agent.run_event_store import append_event
 from src.services.agent.run_event_types import RunEventType
 from src.services.harness.chat_context import create_chat_context
@@ -1465,7 +1488,7 @@ async def create_handoff_run(
             payload={},
             organization_id=child.organization_id,
         )
-        await _insert_outbox(
+        await insert_outbox(
             db,
             run_id=child.job_id,
             organization_id=child.organization_id,
