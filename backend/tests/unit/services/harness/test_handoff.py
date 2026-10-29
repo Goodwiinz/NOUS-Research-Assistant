@@ -35,6 +35,14 @@ otherwise mask a missing org or nested-parent guard:
   test_a_folder_lost_at_insert_is_a_workspace_conflict[postgres];
 * removing the status recheck after the mint fails
   test_a_parent_that_stopped_while_minting_is_refused;
+* delivery.project_terminal: forcing ``child = False``, writing the assistant
+  row for a child, not storing ``handoff_reply`` or replacing run_metadata
+  instead of merging it fails
+  test_child_reply_is_stored_on_the_run_not_the_transcript; dropping the
+  reply cap fails test_child_reply_is_capped; skipping the row for every run
+  fails test_a_top_level_codex_run_still_writes_its_assistant_row. Putting
+  ``assistant_message_id`` back in a child's payload is an equivalent mutant
+  (validate_payload drops the None value);
 * removing ``not run.parent_run_id`` in prompt_context.build_harness_prompt
   fails test_prompt_context.test_a_brief_without_a_parent_run_is_refused.
 """
@@ -49,13 +57,14 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
+from src.models.chat_message import ChatMessage
 from src.models.collection import Collection
 from src.models.harness_session import HarnessSession
 from src.models.integration_grant import IntegrationGrant
@@ -66,6 +75,12 @@ from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.agent_submission_service import accept_submission
 from src.services.agent.schemas import AgentExecuteRequest, AgentMessage
 from src.services.harness import handoff as handoff_service
+from src.services.harness.delivery import (
+    HANDOFF_REPLY_CHARS,
+    dispatch_pending,
+    ingest_bridge_event,
+    lease_commands,
+)
 from src.services.harness.handoff import (
     MAX_BRIEF_CHARS,
     create_handoff_run,
@@ -80,6 +95,10 @@ from src.services.integrations.context import (
     exchange_request,
 )
 from src.shared.enums import JobStatus
+from tests.unit.services.harness.test_delivery import (  # noqa: F401
+    delivery_tables,
+    event,
+)
 from tests.unit.services.harness.test_runs import (  # noqa: F401
     DEVICE,
     LOCAL,
@@ -676,3 +695,144 @@ async def test_a_chat_no_longer_available_is_refused(
     with pytest.raises(ValueError, match="no longer available"):
         await handoff(db, parent)
     assert await children(db, parent) == 0
+
+
+async def run_child_to(
+    db: AsyncSession,
+    context: IntegrationContext,
+    child_id: str,
+    state: str,
+    deltas: tuple[str, ...] = ("answer",),
+) -> None:
+    """Drive the child through the fake bridge to ``state``."""
+    assert await dispatch_pending(db) == 1
+    (command,) = await lease_commands(db, context, DEVICE)
+    assert str(command.runId) == child_id
+
+    def observe(seq: int, value: str) -> Any:
+        return event(
+            command,
+            seq,
+            body={
+                "kind": "observation",
+                "state": value,
+                "sessionId": "n",
+                "turnId": "t",
+            },
+        )
+
+    await ingest_bridge_event(db, context, observe(1, "running"))
+    for seq, text_ in enumerate(deltas, start=2):
+        await ingest_bridge_event(
+            db,
+            context,
+            event(
+                command,
+                seq,
+                body={
+                    "kind": "event",
+                    "eventType": "assistant.delta",
+                    "payload": {"text": text_},
+                },
+            ),
+        )
+    await ingest_bridge_event(db, context, observe(2 + len(deltas), state))
+
+
+@pytest.fixture
+def assistant_writer(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the transcript writer to this test database, so a wrongly
+    written assistant row is visible here."""
+    from src.services.agent import agent_execution_service as execution
+
+    monkeypatch.setattr(
+        execution,
+        "AsyncSessionLocal",
+        async_sessionmaker(db.bind, expire_on_commit=False),
+    )
+
+
+async def assistant_rows(db: AsyncSession, run_id: str) -> int:
+    count = await db.scalar(
+        select(func.count())
+        .select_from(ChatMessage)
+        .where(ChatMessage.client_message_id == run_id)
+    )
+    return int(count or 0)
+
+
+@pytest.mark.parametrize(
+    ("state", "status", "reply"),
+    [
+        ("completed", JobStatus.COMPLETED, "answer"),
+        ("failed", JobStatus.FAILED, "answer"),
+        ("interrupted", JobStatus.CANCELLED, "answer"),
+    ],
+)
+async def test_child_reply_is_stored_on_the_run_not_the_transcript(
+    db: AsyncSession,
+    context: IntegrationContext,
+    assistant_writer: None,
+    state: str,
+    status: JobStatus,
+    reply: str,
+) -> None:
+    parent = await parent_run(db)
+    child_id = await handoff(db, parent)
+    await run_child_to(db, context, child_id, state)
+    db.expire_all()
+    child = await db.get(AgentRun, child_id)
+    assert child is not None and child.status == status.value
+    assert child.run_metadata["handoff_reply"] == reply
+    # Merged, not replaced: the brief and the prompt provenance survive.
+    assert child.run_metadata["handoff_brief"] == BRIEF
+    assert child.run_metadata["harness_prompt"]["source_digest"]
+    assert await assistant_rows(db, child_id) == 0
+    assert await assistant_rows(db, parent) == 0
+    terminal = await db.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == child_id)
+        .order_by(AgentRunEvent.seq.desc())
+        .limit(1)
+    )
+    assert terminal is not None
+    assert "assistant_message_id" not in (terminal.payload or {})
+
+
+async def test_child_without_output_stores_the_fallback_reply(
+    db: AsyncSession, context: IntegrationContext, assistant_writer: None
+) -> None:
+    child_id = await handoff(db, await parent_run(db))
+    await run_child_to(db, context, child_id, "failed", deltas=())
+    db.expire_all()
+    child = await db.get(AgentRun, child_id)
+    assert child is not None
+    assert child.run_metadata["handoff_reply"] == "External execution failed."
+    assert await assistant_rows(db, child_id) == 0
+
+
+async def test_child_reply_is_capped(
+    db: AsyncSession, context: IntegrationContext, assistant_writer: None
+) -> None:
+    chunk = "y" * 1500
+    child_id = await handoff(db, await parent_run(db))
+    await run_child_to(db, context, child_id, "completed", deltas=(chunk,) * 3)
+    db.expire_all()
+    child = await db.get(AgentRun, child_id)
+    assert child is not None
+    assert child.run_metadata["handoff_reply"] == ("y" * 4500)[:HANDOFF_REPLY_CHARS]
+    assert HANDOFF_REPLY_CHARS == 4000
+
+
+async def test_a_top_level_codex_run_still_writes_its_assistant_row(
+    db: AsyncSession, context: IntegrationContext, assistant_writer: None
+) -> None:
+    from tests.unit.services.harness.test_runs import accept
+
+    accepted = await accept(db, context)
+    await run_child_to(db, context, accepted.run_id, "completed")
+    db.expire_all()
+    run = await db.get(AgentRun, accepted.run_id)
+    assert run is not None and run.status == JobStatus.COMPLETED.value
+    assert "handoff_reply" not in (run.run_metadata or {})
+    assert await assistant_rows(db, accepted.run_id) == 1
