@@ -160,9 +160,11 @@ async def create_handoff_run(
             workspace_id=workspace_id,
         )
         # The mint committed, which released the parent lock: take it again
-        # and recheck what may have changed meanwhile.
+        # and recheck what may have changed meanwhile. A racer for this tool
+        # call may have created the child and parked the parent: return it
+        # before requiring RUNNING, as the pre-mint lookup would.
         parent = await _lock_parent(db, parent_run_id)
-        if parent is None or parent.status != JobStatus.RUNNING.value:
+        if parent is None:
             raise IntegrationAccessDenied()
         existing = await existing_handoff_run(
             db, parent_run_id=parent_run_id, tool_call_id=tool_call_id, **owner
@@ -170,6 +172,8 @@ async def create_handoff_run(
         if existing is not None:
             await db.commit()
             return existing
+        if parent.status != JobStatus.RUNNING.value:
+            raise IntegrationAccessDenied()
         child_id = str(uuid4())
         child = AgentRun(
             job_id=child_id,

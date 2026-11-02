@@ -617,6 +617,34 @@ async def test_a_parent_that_stopped_while_minting_is_refused(
     assert await children(db, parent) == 0
 
 
+async def test_a_racer_that_lost_while_minting_returns_the_parked_winner(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent call for the same tool call creates the child and parks
+    the parent while this one mints: the replay returns that child, as the
+    pre-mint lookup would, instead of refusing on the parent's new status."""
+    parent = await parent_run(db)
+    real = handoff_service.create_chat_context
+    winner: list[str] = []
+
+    async def winner_parks_meanwhile(*args: Any, **kwargs: Any) -> Any:
+        minted = await real(*args, **kwargs)
+        if not winner:
+            monkeypatch.setattr(handoff_service, "create_chat_context", real)
+            winner.append(await handoff(db, parent))
+            await db.execute(
+                update(AgentRun)
+                .where(AgentRun.job_id == parent)
+                .values(status=JobStatus.DELEGATED.value)
+            )
+            await db.commit()
+        return minted
+
+    monkeypatch.setattr(handoff_service, "create_chat_context", winner_parks_meanwhile)
+    assert await handoff(db, parent) == winner[0]
+    assert await children(db, parent) == 1
+
+
 class AsyncpgUniqueViolationError(Exception):
     """asyncpg's driver error: it alone carries ``constraint_name``."""
 
