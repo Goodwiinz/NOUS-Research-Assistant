@@ -213,6 +213,36 @@ async def test_swept_run_closes_its_ledger_and_retires_its_outbox(
 
 
 @pytest.mark.asyncio
+async def test_swept_run_retires_only_its_dispatch_row(session_factory):
+    """A run can hold a second outbox row (a finished handoff child's
+    ``handoff.resume``); the sweep retires the dispatch intent only.
+
+    Mutation check: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
+    ``agent_run_service.terminalize_stale_run``'s outbox UPDATE and this
+    fails with the resume row reading ``failed``.
+    """
+    job_id = await _seed_stream_submission(session_factory, status="queued")
+    async with session_factory() as db:
+        db.add(AgentOutbox(run_id=job_id, kind="handoff.resume", payload={}))
+        await db.commit()
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    async with session_factory() as db:
+        rows = dict(
+            (
+                await db.execute(
+                    select(AgentOutbox.kind, AgentOutbox.status).where(
+                        AgentOutbox.run_id == job_id
+                    )
+                )
+            ).all()
+        )
+    assert rows == {"agent.stream.execute": "failed", "handoff.resume": "pending"}
+
+
+@pytest.mark.asyncio
 async def test_terminal_and_recent_rows_untouched(session_factory):
     done_id = await _seed(session_factory, status="completed", updated_at=VERY_STALE)
     failed_id = await _seed(session_factory, status="failed", updated_at=VERY_STALE)

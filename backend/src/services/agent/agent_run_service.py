@@ -36,7 +36,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import DISPATCH_KINDS, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
@@ -132,8 +132,12 @@ def _integrity_error_chain(exc: IntegrityError) -> list[Any]:
     return chain
 
 
-def _integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
-    """Read a driver-reported constraint name without parsing user text."""
+def integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
+    """Read a driver-reported constraint name without parsing user text.
+
+    Walks the bounded cause chain, so asyncpg's ``UniqueViolationError``
+    behind SQLAlchemy's adapted ``.orig`` is found too. SQLite reports none.
+    """
     for original in _integrity_error_chain(exc):
         constraint = getattr(original, "constraint_name", None)
         if constraint:
@@ -143,6 +147,10 @@ def _integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
         if constraint:
             return str(constraint)
     return None
+
+
+# Compatibility name for existing in-module callers.
+_integrity_constraint_name = integrity_constraint_name
 
 
 def _is_active_thread_conflict(exc: IntegrityError) -> bool:
@@ -658,6 +666,7 @@ async def terminalize_stale_run(
                 update(AgentOutbox)
                 .where(
                     AgentOutbox.run_id == job_id,
+                    AgentOutbox.kind.in_(DISPATCH_KINDS),
                     AgentOutbox.status == AgentOutboxStatus.PENDING.value,
                 )
                 .values(

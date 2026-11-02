@@ -81,7 +81,13 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import (
+    DISPATCH_KIND_STREAM,
+    DISPATCH_KINDS,
+    HANDOFF_RESUME_KIND,
+    HARNESS_EXECUTE_KIND,
+    AgentOutbox,
+)
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.chat_message import ChatMessage, MessageRole
@@ -105,10 +111,10 @@ from src.shared.enums import TERMINAL_JOB_STATUSES, AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 
-# Dispatch kind for a turn executed in-process by the SSE stream generator.
-# Free-form by design (see the model docstring): a relay dispatching to another
-# backend must be addable without a migration.
-DISPATCH_KIND_STREAM = "agent.stream.execute"
+# Outbox kinds (DISPATCH_KIND_STREAM, HARNESS_EXECUTE_KIND, HANDOFF_RESUME_KIND)
+# live with the model so agent_run_service and the harness services can filter
+# on them without importing this module; this module re-exports them. Free-form by design (see the model
+# docstring): a new one is a constant there, not a migration.
 
 # Prefix keeps /stream and /execute idempotency namespaces disjoint: the same
 # client_message_id sent to both endpoints is two different submissions.
@@ -217,8 +223,19 @@ async def _find_by_idempotency_key(
 
 
 async def _existing_outbox_id(db: AsyncSession, run_id: str) -> Optional[str]:
-    """The dispatch record for *run_id* (keyed by a server-generated id)."""
-    stmt = select(AgentOutbox.id).where(AgentOutbox.run_id == run_id).limit(1)
+    """The dispatch record for *run_id* (keyed by a server-generated id).
+
+    Filtered on the dispatch kinds: a finished handoff child also holds a
+    ``handoff.resume`` row, which is not the record a replay reports. A run
+    has one dispatch row today; should it ever hold both dispatch kinds, the
+    first one written is the record, deterministically.
+    """
+    stmt = (
+        select(AgentOutbox.id)
+        .where(AgentOutbox.run_id == run_id, AgentOutbox.kind.in_(DISPATCH_KINDS))
+        .order_by(AgentOutbox.created_at, AgentOutbox.id)
+        .limit(1)
+    )
     found = (await db.execute(stmt)).scalar_one_or_none()
     return str(found) if found is not None else None
 
@@ -719,6 +736,7 @@ async def fail_queued_submission(
             update(AgentOutbox)
             .where(
                 AgentOutbox.run_id == run_id,
+                AgentOutbox.kind.in_(DISPATCH_KINDS),
                 AgentOutbox.organization_id == _coerce_uuid(organization_id),
                 AgentOutbox.status == AgentOutboxStatus.PENDING.value,
             )
@@ -800,6 +818,49 @@ async def _insert_outbox(
     db.add(record)
     await db.flush()
     return record
+
+
+async def insert_outbox(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    organization_id: Any,
+    kind: str,
+    payload: dict[str, Any],
+) -> AgentOutbox:
+    """Public entry for other services to write an outbox record. Does NOT commit.
+
+    Same contract as ``_insert_outbox``; the caller owns the transaction.
+    """
+    return await _insert_outbox(
+        db, run_id=run_id, organization_id=organization_id, kind=kind, payload=payload
+    )
+
+
+async def write_handoff_resume(
+    db: AsyncSession, *, run_id: str, organization_id: Any
+) -> Optional[AgentOutbox]:
+    """Leave the resume record for *run_id*'s parent, if it is a handoff child.
+
+    Does NOT commit: call it in the transaction that moved the run to a
+    terminal status, after the guarded UPDATE that won that transition, so
+    the record is written exactly once (``uq_agent_outbox_run_kind`` turns a
+    second write into an IntegrityError). Top-level runs get nothing.
+    """
+    parent_run_id = (
+        await db.execute(
+            select(AgentRun.parent_run_id).where(AgentRun.job_id == run_id)
+        )
+    ).scalar_one_or_none()
+    if parent_run_id is None:
+        return None
+    return await _insert_outbox(
+        db,
+        run_id=run_id,
+        organization_id=organization_id,
+        kind=HANDOFF_RESUME_KIND,
+        payload={"parent_run_id": str(parent_run_id)},
+    )
 
 
 async def accept_submission(
@@ -1024,7 +1085,7 @@ async def accept_submission(
             db,
             run_id=job_id,
             organization_id=organization_id,
-            kind="harness.execute" if provider == "codex" else kind,
+            kind=HARNESS_EXECUTE_KIND if provider == "codex" else kind,
             payload={
                 "execution_provider": provider,
                 "thread_id": str(thread_uuid),
@@ -1369,6 +1430,12 @@ async def finalize_submission(
                     .where(HarnessSession.run_id == run_id)
                     .values(workspace_locked=False)
                 )
+                # Same transaction as the terminal transition: a finished child
+                # always leaves a resume record for its parent, exactly once
+                # (the guarded UPDATE above wins only once).
+                await write_handoff_resume(
+                    db, run_id=run_id, organization_id=organization_id
+                )
             if commit:
                 await db.commit()
             return True
@@ -1403,12 +1470,15 @@ async def finalize_submission(
 
 __all__ = [
     "DISPATCH_KIND_STREAM",
+    "HANDOFF_RESUME_KIND",
     "AcceptedSubmission",
     "RunCancellationResult",
     "accept_submission",
     "fail_queued_submission",
     "finalize_submission",
+    "insert_outbox",
     "mark_submission_dispatched",
     "request_run_cancellation",
     "stream_idempotency_key",
+    "write_handoff_resume",
 ]
