@@ -38919,7 +38919,6 @@
             "name": "paper_id",
             "required": true,
             "schema": {
-              "pattern": "^(?:[aA][rR][xX][iI][vV]:)?\\d{4}\\.\\d{4,5}(?:[vV]\\d+)?$",
               "title": "Paper Id",
               "type": "string"
             }

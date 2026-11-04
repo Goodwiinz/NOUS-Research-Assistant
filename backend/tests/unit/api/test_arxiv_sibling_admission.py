@@ -290,7 +290,7 @@ def _download_client() -> TestClient:
 
 
 @pytest.mark.parametrize(
-    "bad_id", ["not-an-id", "2401.00001%3Fx=1", "2401..0001", "1234"]
+    "bad_id", ["not-an-id", "2401.00001%3Fx=1", "2401..0001", "1234", "%202401.00001"]
 )
 def test_download_rejects_malformed_paper_id_before_budget(bad_id: str) -> None:
     """Audit 2026-11 F4b: validate the id before it reaches the shared cache
