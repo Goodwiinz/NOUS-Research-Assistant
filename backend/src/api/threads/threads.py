@@ -124,6 +124,15 @@ async def check_bulk_summarize_rate_limit(
     )
 
 
+async def check_summarize_rate_limit(
+    request: Request, current_user: User = Depends(get_current_user)
+):
+    """Rate limit: 10 single-thread summary regenerations per minute (LLM call)."""
+    return await check_bulk_rate_limit(
+        request, current_user, limit=10, window=60, operation="summarize_single"
+    )
+
+
 async def check_bulk_delete_rate_limit(
     request: Request, current_user: User = Depends(get_current_user)
 ):
@@ -611,11 +620,13 @@ async def regenerate_thread_summary(
     thread_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _rate_limit: bool = Depends(check_summarize_rate_limit),
 ):
     """
     Regenerate AI summary for a thread.
 
-    Forces regeneration regardless of rate limits.
+    Bypasses the summarization service's staleness throttle (force=True); the
+    HTTP endpoint itself is rate limited per user. Requires edit rights.
     """
     chat_service = get_chat_service(db)
     thread = await chat_service.get_thread(thread_id, current_user.id)
@@ -623,6 +634,15 @@ async def regenerate_thread_summary(
     if not thread:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found"
+        )
+
+    # get_thread only proves read access, which any user has on a public
+    # workspace. Regenerating overwrites thread.summary and spends an LLM call,
+    # so require edit rights (workspace_access.get_thread eager-loads
+    # conversation.workspace.members, so this does not lazy-load).
+    if not thread.conversation.workspace.can_user_edit(str(current_user.id)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
         )
 
     # The summarization service uses the SYNC SQLAlchemy API (db.query / commit)

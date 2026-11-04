@@ -14,14 +14,18 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_platform_operator
 from src.services.processing.entity_extraction_service import EntityExtractionService
 from src.services.processing.multimodal_processing_service import (
     MultimodalProcessingService,
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+# Operator-only: these routes read the shared ingestion download cache
+# (/app/data/arxiv) that every org writes to. Tenant access leaked which papers
+# other orgs had ingested, plus absolute server paths, and let one org ingest
+# PDFs another org downloaded (audit 2026-11 F4). No UI/CLI caller uses them.
+router = APIRouter(dependencies=[Depends(require_platform_operator)])
 
 # Path to local ArXiv PDFs
 docker_path = Path("/app/data/arxiv")

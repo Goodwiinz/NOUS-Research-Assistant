@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -42,6 +42,11 @@ _ARXIV_ID_PATTERN = re.compile(
     r"^(?:arxiv:)?(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z][a-z0-9-]*(?:\.[a-z]{2})?/\d{7}(?:v\d+)?)$",
     re.IGNORECASE,
 )
+# Path-param form of the same grammar. Old-style ids ("math/0309136v1") carry
+# a "/", which one path segment cannot hold, so only new-style ids apply here.
+# Spelled without inline flags: the pattern is published in openapi.json and
+# must stay valid ECMA-262 for JSON-Schema tooling and generated clients.
+_ARXIV_PATH_ID_REGEX = r"^(?:[aA][rR][xX][iI][vV]:)?\d{4}\.\d{4,5}(?:[vV]\d+)?$"
 
 
 # Pydantic models
@@ -369,7 +374,11 @@ async def get_arxiv_categories(current_user: UserResponse = Depends(get_current_
 @router.get("/download/{paper_id}")
 @metered_expensive_work
 async def download_paper(
-    paper_id: str, current_user: UserResponse = Depends(get_current_user)
+    # Validated here, not in the body: @metered_expensive_work debits the org
+    # budget before the body runs, and the id feeds both the shared cache path
+    # and the arxiv.org URL (audit 2026-11 F4b).
+    paper_id: str = Path(..., pattern=_ARXIV_PATH_ID_REGEX),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """
     Download PDF for a specific arXiv paper

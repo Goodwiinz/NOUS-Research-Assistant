@@ -176,3 +176,57 @@ def test_generated_summary_still_returns_the_thread():
     assert result.summary == "fresh summary"
     assert result.id == thread.id
     db.refresh.assert_awaited_once_with(thread)
+
+
+# --- Authz: regenerating a summary is a write (audit 2026-11 F7) -------------
+#
+# ``get_thread`` only proves read access, which any authenticated user from any
+# org has on a *public* workspace. The route then overwrites ``thread.summary``
+# and spends an LLM call, so it must require edit rights (same rule as
+# workspace_routes/messages.py create) and carry a per-user rate limit.
+# Focused command:
+#   pytest -q backend/tests/api/test_thread_summary_sync_helper.py -k f7
+
+
+@pytest.mark.unit
+def test_f7_read_only_viewer_cannot_regenerate_summary():
+    from fastapi import HTTPException
+
+    from src.api.threads import threads as threads_mod
+
+    thread = _thread_stub(summary="previous summary")
+    thread.conversation.workspace.can_user_edit.return_value = False
+
+    with patch.object(threads_mod, "_run_thread_summary_sync") as run_sync:
+        with pytest.raises(HTTPException) as exc_info:
+            _call_regenerate(thread, sync_result="new summary")
+
+    assert exc_info.value.status_code == 403
+    run_sync.assert_not_called()
+
+
+@pytest.mark.unit
+def test_f7_editor_check_uses_caller_identity():
+    thread = _thread_stub(summary="fresh summary")
+    thread.conversation.workspace.can_user_edit.return_value = True
+
+    result, _db = _call_regenerate(thread, sync_result="fresh summary")
+
+    assert result.summary == "fresh summary"
+    (called_with,), _ = thread.conversation.workspace.can_user_edit.call_args
+    assert isinstance(called_with, str)
+
+
+@pytest.mark.unit
+def test_f7_route_is_rate_limited_per_user():
+    import inspect
+
+    from src.api.threads import threads as threads_mod
+
+    params = inspect.signature(threads_mod.regenerate_thread_summary).parameters
+    deps = [
+        p.default.dependency
+        for p in params.values()
+        if getattr(p.default, "dependency", None) is not None
+    ]
+    assert threads_mod.check_summarize_rate_limit in deps

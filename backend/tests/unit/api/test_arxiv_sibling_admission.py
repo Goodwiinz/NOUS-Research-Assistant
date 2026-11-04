@@ -29,7 +29,7 @@ from src.api.arxiv import (
     arxiv_router,
 )
 from src.api.arxiv import papers as arxiv_papers
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_platform_operator
 from src.models.user import User
 from src.services import expensive_work_admission
 from src.services.expensive_work_admission import require_expensive_work_admission
@@ -39,9 +39,13 @@ USER_ROUTERS = [
     arxiv_kg_router,
     arxiv_change_router,
     arxiv_extraction_router,
-    arxiv_local_router,
     arxiv_papers_router,
 ]
+# Operator-only routers: no tenant user can reach them, so they sit outside the
+# shared org budget. arxiv_local reads the ingestion download cache that every
+# org writes to (/app/data/arxiv); exposing it to tenants leaked which papers
+# other orgs ingested plus server paths (audit 2026-11 F4).
+OPERATOR_ROUTERS = [arxiv_bulk_router, arxiv_llm_bulk_router, arxiv_local_router]
 EXPENSIVE = {
     "/api/v1/arxiv/papers/metadata",  # lazy admission on upstream miss
     "/api/v1/arxiv/papers/pdf",  # lazy admission on upstream miss
@@ -54,8 +58,6 @@ EXPENSIVE = {
     "/bulk-ingest",
     "/extract-features",
     "/bulk-extract",
-    "/extract-local-features",
-    "/process-batch",
     "/track-categories",
     "/track-all",
     "/force-sync",
@@ -67,8 +69,6 @@ CHEAP = {
     "/stats",
     "/cleanup",
     "/extracted-features",
-    "/local-papers",
-    "/local-stats",
 }
 LAZY_ADMISSION = {"/api/v1/arxiv/papers/metadata", "/api/v1/arxiv/papers/pdf"}
 IN_HANDLER = {"/api/v1/arxiv/ingest", "/api/v1/arxiv/create-dataset"} | LAZY_ADMISSION
@@ -86,7 +86,7 @@ def test_route_inventory_is_exhaustive() -> None:
 
 def test_bulk_routers_are_platform_operator_only() -> None:
     # Exempt from the org budget only because no tenant user can reach them.
-    for router in (arxiv_bulk_router, arxiv_llm_bulk_router):
+    for router in OPERATOR_ROUTERS:
         names = {d.dependency.__name__ for d in router.dependencies}
         assert "require_platform_operator" in names
 
@@ -208,9 +208,9 @@ def test_local_batch_processes_papers_with_one_admission(tmp_path: Path) -> None
     (tmp_path / "2401.00001.pdf").write_bytes(b"local fixture")
     app = FastAPI()
     app.include_router(arxiv_local_router)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
-        id=uuid4(), organization_id=uuid4(), organization=None
-    )
+    operator = SimpleNamespace(id=uuid4(), organization_id=uuid4(), organization=None)
+    app.dependency_overrides[get_current_user] = lambda: operator
+    app.dependency_overrides[require_platform_operator] = lambda: operator
     admit = AsyncMock(return_value=True)
     options = {
         "extract_entities": False,
@@ -237,9 +237,9 @@ def test_denied_batch_starts_no_search_or_local_extraction(path: str) -> None:
     app = FastAPI()
     app.include_router(arxiv_extraction_router)
     app.include_router(arxiv_local_router)
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
-        id=uuid4(), organization_id=uuid4(), organization=None
-    )
+    operator = SimpleNamespace(id=uuid4(), organization_id=uuid4(), organization=None)
+    app.dependency_overrides[get_current_user] = lambda: operator
+    app.dependency_overrides[require_platform_operator] = lambda: operator
     admit = AsyncMock(return_value=False)
     with (
         patch.object(expensive_work_admission, "admit_expensive_work", admit),
@@ -251,3 +251,75 @@ def test_denied_batch_starts_no_search_or_local_extraction(path: str) -> None:
     admit.assert_awaited_once()
     service.assert_not_called()
     data_path.glob.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/local-papers"),
+        ("get", "/local-stats"),
+        ("post", "/extract-local-features"),
+        ("post", "/process-batch"),
+    ],
+)
+def test_tenant_user_cannot_reach_local_arxiv_cache(method: str, path: str) -> None:
+    """Audit 2026-11 F4: the shared download cache is operator-only."""
+    app = FastAPI()
+    app.include_router(arxiv_local_router)
+    tenant = SimpleNamespace(
+        id=uuid4(), organization_id=uuid4(), organization=None, email="t@x.io"
+    )
+    app.dependency_overrides[get_current_user] = lambda: tenant
+    admit = AsyncMock(return_value=True)
+    # A random tenant UUID is never in PLATFORM_OPERATOR_USER_IDS.
+    with patch.object(expensive_work_admission, "admit_expensive_work", admit):
+        response = getattr(TestClient(app), method)(
+            path, **({"json": {}} if method == "post" else {})
+        )
+    assert response.status_code == 403
+    admit.assert_not_awaited()
+
+
+def _download_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(arxiv_router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=uuid4(), organization_id=uuid4(), organization=None
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "bad_id", ["not-an-id", "2401.00001%3Fx=1", "2401..0001", "1234"]
+)
+def test_download_rejects_malformed_paper_id_before_budget(bad_id: str) -> None:
+    """Audit 2026-11 F4b: validate the id before it reaches the shared cache
+    path / arxiv.org URL, and (house rule) before the org budget is debited."""
+    from src.api.arxiv import core as arxiv_core
+
+    admit = AsyncMock(return_value=True)
+    with (
+        patch.object(expensive_work_admission, "admit_expensive_work", admit),
+        patch.object(arxiv_core, "ArXivIngestionService") as service,
+    ):
+        response = _download_client().get(f"/api/v1/arxiv/download/{bad_id}")
+    assert response.status_code == 422
+    admit.assert_not_awaited()
+    service.assert_not_called()
+
+
+@pytest.mark.parametrize("good_id", ["2401.00001", "1706.03762v5", "arXiv:2401.00001"])
+def test_download_accepts_valid_paper_id(good_id: str) -> None:
+    from src.api.arxiv import core as arxiv_core
+
+    admit = AsyncMock(return_value=True)
+    service = AsyncMock()
+    service.__aenter__.return_value = service
+    service.download_paper_pdf.return_value = None
+    with (
+        patch.object(expensive_work_admission, "admit_expensive_work", admit),
+        patch.object(arxiv_core, "ArXivIngestionService", return_value=service),
+    ):
+        response = _download_client().get(f"/api/v1/arxiv/download/{good_id}")
+    assert response.status_code != 422, response.text
+    service.download_paper_pdf.assert_awaited_once_with(good_id)
