@@ -25,7 +25,7 @@ SRC = BACKEND_ROOT / "src"
 # ---------------------------------------------------------------------------
 
 
-def test_anonymous_arxiv_search_stays_rate_limited():
+def test_anonymous_arxiv_search_stays_rate_limited() -> None:
     """F3 (accepted risk): the endpoint is deliberately unauthenticated, so the
     only thing stopping an anonymous flood from draining the shared arXiv
     upstream gate is ApiRateLimitMiddleware's "arxiv" bucket. Fail if the path
@@ -55,13 +55,13 @@ _LEAK_ROUTERS = [
 ]
 
 
-def _httpexception_detail_leaks(tree: ast.AST) -> list:
+def _httpexception_detail_leaks(tree: ast.AST) -> list[int]:
     """Return line numbers where an HTTPException detail interpolates an
     exception variable (str(e) or an f-string referencing the caught name)."""
-    leaks = []
+    leaks: list[int] = []
 
     class Visitor(ast.NodeVisitor):
-        def visit_Raise(self, node: ast.Raise):
+        def visit_Raise(self, node: ast.Raise) -> None:
             exc = node.exc
             if isinstance(exc, ast.Call) and _is_http_exception(exc.func):
                 for kw in exc.keywords:
@@ -69,7 +69,7 @@ def _httpexception_detail_leaks(tree: ast.AST) -> list:
                         leaks.append(kw.value.lineno)
             self.generic_visit(node)
 
-    def _is_http_exception(func) -> bool:
+    def _is_http_exception(func: ast.expr) -> bool:
         name = ""
         if isinstance(func, ast.Name):
             name = func.id
@@ -77,7 +77,7 @@ def _httpexception_detail_leaks(tree: ast.AST) -> list:
             name = func.attr
         return name == "HTTPException"
 
-    def _value_interpolates_exc(value) -> bool:
+    def _value_interpolates_exc(value: ast.expr) -> bool:
         # detail=f"...{str(e)}..." or detail=f"...{e}..."
         if isinstance(value, ast.JoinedStr):
             for part in value.values:
@@ -111,7 +111,7 @@ def _httpexception_detail_leaks(tree: ast.AST) -> list:
     return leaks
 
 
-def test_error_responses_do_not_leak_exception_text():
+def test_error_responses_do_not_leak_exception_text() -> None:
     """F5: HTTP 500 detail must not echo raw exception text.
 
     GET /api/v2/realtime/documents/not-a-uuid/status raises an asyncpg
@@ -119,7 +119,7 @@ def test_error_responses_do_not_leak_exception_text():
     that in the response detail leaks schema and bound values. Fix: log with
     exc_info and return a fixed detail string.
     """
-    offenders = {}
+    offenders: dict[str, list[int]] = {}
     for path in _LEAK_ROUTERS:
         if not path.exists():
             continue
@@ -140,7 +140,7 @@ def test_error_responses_do_not_leak_exception_text():
 # ---------------------------------------------------------------------------
 
 
-def test_collection_attach_scopes_to_caller_org():
+def test_collection_attach_scopes_to_caller_org() -> None:
     """F2: add_documents_to_collection / create_collection resolve document
     access using collection.workspace.organization_id instead of the caller's
     org. Because workspaces admit cross-org members, an org-B editor in an
@@ -155,7 +155,7 @@ def test_collection_attach_scopes_to_caller_org():
 
     RESOLVERS = {"get_accessible_document_or_none", "filter_owned_document_ids"}
 
-    def _is_workspace_org_expr(node) -> bool:
+    def _is_workspace_org_expr(node: ast.AST) -> bool:
         # <anything>.workspace.organization_id
         return (
             isinstance(node, ast.Attribute)
@@ -165,7 +165,7 @@ def test_collection_attach_scopes_to_caller_org():
         )
 
     # Names bound to a workspace-org value, directly or via getattr().
-    tainted = set()
+    tainted: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
             continue
@@ -186,12 +186,12 @@ def test_collection_attach_scopes_to_caller_org():
                 if isinstance(t, ast.Name):
                     tainted.add(t.id)
 
-    def _arg_is_workspace_org(arg) -> bool:
+    def _arg_is_workspace_org(arg: ast.expr) -> bool:
         if _is_workspace_org_expr(arg):
             return True
         return isinstance(arg, ast.Name) and arg.id in tainted
 
-    bad = []
+    bad: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -231,8 +231,8 @@ _JWT_DECODE_ALLOWLIST = {
 }
 
 
-def test_jwt_decode_only_in_allowlisted_modules():
-    offenders = []
+def test_jwt_decode_only_in_allowlisted_modules() -> None:
+    offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
