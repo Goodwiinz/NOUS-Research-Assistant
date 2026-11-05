@@ -1,0 +1,8 @@
+{
+  "name": "@nous/design-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "design-sync wrapper: the NOUS frontend's components as one package (see gen-entry.mjs)",
+  "module": "./index.ts",
+  "types": "./types/.design-sync/pkg/index.d.ts"
+}
