@@ -281,6 +281,9 @@ export class SearchService {
 
       return this.transformSearchResponse(response, request);
     } catch (error: any) {
+      // A caller abort is not a search failure: rethrow so the caller's own
+      // cancellation handling runs instead of rendering an error bubble.
+      if (signal?.aborted) throw error;
       if (this.isNotFoundError(error)) {
         try {
           const fallbackResponse = (await api.post(
@@ -291,6 +294,7 @@ export class SearchService {
 
           return this.transformSearchResponse(fallbackResponse, request);
         } catch (fallbackError: any) {
+          if (signal?.aborted) throw fallbackError;
           if (!this.isSilentError(fallbackError)) {
             console.error('Search service fallback error:', fallbackError);
           }

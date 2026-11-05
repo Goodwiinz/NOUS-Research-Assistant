@@ -137,7 +137,7 @@ export const GraphHealthMonitor: React.FC = () => {
       const data = await api.get<
         Partial<GraphHealthStatus & BackendGraphHealthStatus>
       >(
-        'knowledge-graph/health'
+        '/knowledge-graph/health'
       );
       setHealth(normalizeHealthStatus(data));
     } catch (error) {

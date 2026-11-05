@@ -105,6 +105,43 @@ describe('searchService deterministic routing', () => {
     expect(mockApi.post).toHaveBeenCalledTimes(2);
   });
 
+  it('rethrows when the caller aborted instead of reporting a search failure', async () => {
+    // The search page only suppresses the "search failed" bubble in its own
+    // catch; returning {success:false} for an abort made a superseded search
+    // render an error message.
+    const controller = new AbortController();
+    controller.abort();
+    const abortError = new DOMException('aborted', 'AbortError');
+    mockApi.post.mockRejectedValueOnce(abortError);
+
+    await expect(
+      searchService.search({ query: 'q' }, controller.signal)
+    ).rejects.toBe(abortError);
+    expect(mockApi.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows an abort that lands during the 404 fallback request', async () => {
+    const controller = new AbortController();
+    mockApi.post
+      .mockRejectedValueOnce(
+        new APIErrorClass({
+          message: 'Not Found',
+          status_code: 404,
+          type: 'http_error',
+          details: { detail: 'Not Found' },
+        })
+      )
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        throw new DOMException('aborted', 'AbortError');
+      });
+
+    await expect(
+      searchService.search({ query: 'q' }, controller.signal)
+    ).rejects.toThrow('aborted');
+    expect(mockApi.post).toHaveBeenCalledTimes(2);
+  });
+
   it('does not fall back for non-404 hybrid failures and returns success false', async () => {
     mockApi.post.mockRejectedValueOnce(
       new APIErrorClass({
