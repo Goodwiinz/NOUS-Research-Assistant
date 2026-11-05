@@ -3,11 +3,13 @@ Alembic environment configuration
 """
 
 import os
+import re
 import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import JSON, engine_from_config, pool
+from sqlalchemy.dialects.postgresql import JSONB
 
 # Add the src directory to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -69,6 +71,43 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 target_metadata = Base.metadata
+
+
+_JSON_DEFAULT_CAST_RE = re.compile(r"::jsonb?$")
+
+
+def _normalize_json_default(value):
+    if value is None:
+        return None
+    text = _JSON_DEFAULT_CAST_RE.sub("", str(value).strip())
+    return text.strip("'")
+
+
+def compare_server_default(
+    context,
+    inspected_column,
+    metadata_column,
+    inspected_default,
+    metadata_default,
+    rendered_metadata_default,
+):
+    """Compare plain JSON server defaults textually.
+
+    Alembic's default comparison asks the server ``SELECT <reflected> =
+    <rendered>``. PostgreSQL has no ``=`` operator for ``json`` (only
+    ``jsonb``), so a JSON column with a server default
+    (integration_context_selections.skill_version_ids, ``'[]'::json``)
+    crashed ``alembic check`` with "operator does not exist: json = unknown",
+    and the drift check silently stopped checking anything. Compare the
+    normalized default text for plain JSON; everything else (JSONB included)
+    keeps Alembic's own comparison (``None``).
+    """
+    column_type = metadata_column.type
+    if isinstance(column_type, JSON) and not isinstance(column_type, JSONB):
+        return _normalize_json_default(inspected_default) != _normalize_json_default(
+            rendered_metadata_default
+        )
+    return None
 
 
 def include_object(obj, name, type_, reflected, compare_to):
@@ -295,7 +334,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        compare_server_default=True,
+        compare_server_default=compare_server_default,
     )
 
     with context.begin_transaction():
@@ -325,7 +364,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             include_object=include_object,
             compare_type=True,
-            compare_server_default=True,
+            compare_server_default=compare_server_default,
         )
 
         with context.begin_transaction():
