@@ -118,9 +118,11 @@ async def test_old_receipt_cannot_approve_next_interrupt_in_same_node() -> None:
     await graph.ainvoke(Command(resume=first.resume(True)), config)
     saved_second = await graph.aget_state(config)
     second = _approval(saved_second)
-    # LangGraph reuses the task interrupt id for sequential calls inside one
-    # node. The saved checkpoint AND action digest must therefore bind it.
-    assert first.interrupt_id == second.interrupt_id
+    # LangGraph <=1.2.19 reused the task interrupt id for sequential calls
+    # inside one node; 1.2.20 issues a fresh id per call. Either way the
+    # approval must not rely on the interrupt id alone: the saved checkpoint
+    # and action digest bind it, so the two gates get distinct approvals and
+    # the first receipt cannot approve the second.
     assert first.approval_id != second.approval_id
     with pytest.raises(ApprovalExpired):
         require_approval(
