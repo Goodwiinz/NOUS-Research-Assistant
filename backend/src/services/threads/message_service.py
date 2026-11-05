@@ -302,7 +302,9 @@ async def delete_message(
     ``PermissionError`` if found but the caller lacks the required rights.
 
     ``require_author_or_admin=False`` (router-canonical default): requires
-    edit rights, matching every other mutator in the router. ``True`` (old
+    edit rights, matching every other mutator in the router, and a
+    human-authored message additionally needs its author or a workspace
+    admin; assistant/system messages stay editor-deletable. ``True`` (old
     ``ChatService`` default, preserved for its own — currently uncalled —
     callers): the message's author may always delete it even as a plain
     editor/viewer; anyone else needs admin rights.
@@ -320,7 +322,17 @@ async def delete_message(
         ):
             raise PermissionError("Insufficient permissions")
     else:
-        if not message.thread.conversation.workspace.can_user_edit(str(user_id)):
+        workspace = message.thread.conversation.workspace
+        if not workspace.can_user_edit(str(user_id)):
+            raise PermissionError("Insufficient permissions")
+        # Edit rights alone let any editor erase another member's words. A
+        # human-authored message may only be deleted by its author or a
+        # workspace admin; assistant/system messages (no human author) stay
+        # deletable by any editor (audit 2026-11 F8).
+        authored_by_other = message.user_id is not None and str(message.user_id) != str(
+            user_id
+        )
+        if authored_by_other and not workspace.can_user_admin(str(user_id)):
             raise PermissionError("Insufficient permissions")
 
     # An individual deletion would leave surviving branch descendants with

@@ -190,12 +190,22 @@ async def test_delete_message_require_author_or_admin_flag(
         await db_session.refresh(m)
         db_session.info["_created"]["chat_messages"].append(m.id)
 
-    # require_author_or_admin=False (router-canonical): editor rights
-    # suffice even though editor didn't author the message.
+    # require_author_or_admin=False (router-canonical): edit rights are
+    # required, and a human-authored message may only be deleted by its author
+    # or a workspace admin (audit 2026-11 F8) -- an editor must not delete the
+    # owner's words.
+    with pytest.raises(PermissionError):
+        await message_service.delete_message(
+            db_session,
+            msg_for_editor_flag_false.id,
+            editor.id,
+            require_author_or_admin=False,
+        )
+    # The owner (workspace admin) may delete any message under the router rule.
     assert await message_service.delete_message(
         db_session,
         msg_for_editor_flag_false.id,
-        editor.id,
+        owner.id,
         require_author_or_admin=False,
     )
 
@@ -211,4 +221,61 @@ async def test_delete_message_require_author_or_admin_flag(
     # The author may always delete under the old rule.
     assert await message_service.delete_message(
         db_session, msg_for_editor_flag_true.id, owner.id, require_author_or_admin=True
+    )
+
+
+async def test_router_delete_rule_editor_own_and_assistant_messages(
+    db_session: AsyncSession,
+    thread_factory: Callable[..., Awaitable[Thread]],
+    user_factory: Callable[..., Awaitable[User]],
+) -> None:
+    """Audit 2026-11 F8: under the router rule an editor may delete their own
+    messages and assistant replies (no human author), a viewer may delete
+    nothing, and an admin may delete an editor's message."""
+    owner = await user_factory()
+    editor = await user_factory()
+    viewer = await user_factory()
+    thread = await thread_factory(user=owner)
+    workspace_id = await _workspace_id_for_thread(db_session, thread)
+    db_session.add_all(
+        [
+            WorkspaceMember(
+                workspace_id=workspace_id, user_id=editor.id, role=WorkspaceRole.EDITOR
+            ),
+            WorkspaceMember(
+                workspace_id=workspace_id, user_id=viewer.id, role=WorkspaceRole.VIEWER
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    editor_own = ChatMessage(
+        thread_id=thread.id, user_id=editor.id, role=MessageRole.USER, content="e"
+    )
+    editor_own_for_admin = ChatMessage(
+        thread_id=thread.id, user_id=editor.id, role=MessageRole.USER, content="e2"
+    )
+    assistant_reply = ChatMessage(
+        thread_id=thread.id, user_id=None, role=MessageRole.ASSISTANT, content="ai"
+    )
+    viewer_target = ChatMessage(
+        thread_id=thread.id, user_id=viewer.id, role=MessageRole.USER, content="v"
+    )
+    msgs = [editor_own, editor_own_for_admin, assistant_reply, viewer_target]
+    db_session.add_all(msgs)
+    await db_session.commit()
+    for m in msgs:
+        await db_session.refresh(m)
+        db_session.info["_created"]["chat_messages"].append(m.id)
+
+    assert await message_service.delete_message(db_session, editor_own.id, editor.id)
+    assert await message_service.delete_message(
+        db_session, assistant_reply.id, editor.id
+    )
+    # Edit rights are still required: a viewer cannot delete even their own.
+    with pytest.raises(PermissionError):
+        await message_service.delete_message(db_session, viewer_target.id, viewer.id)
+    # A workspace admin (owner) may delete another member's message.
+    assert await message_service.delete_message(
+        db_session, editor_own_for_admin.id, owner.id
     )
