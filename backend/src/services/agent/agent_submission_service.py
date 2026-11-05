@@ -87,7 +87,11 @@ from src.models.agent_run_event import AgentRunEvent
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.thread import Thread
 from src.schemas.integration_context import IntegrationContext
-from src.services.agent.agent_run_service import ActiveRunConflict
+from src.services.agent.agent_run_service import (
+    ActiveRunConflict,
+    HandoffInProgress,
+    top_level_run,
+)
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
 from src.services.threads.message_branches import (
@@ -456,17 +460,23 @@ async def _ensure_thread_idle(
 
     A shared thread's active run may belong to another member. Only the run's
     own user may supersede it (see the module docstring); anyone else conflicts.
+    A ``delegated`` handoff parent is never retired: ``HandoffInProgress``.
     """
     active = (
         await db.execute(
             select(AgentRun).where(
                 AgentRun.thread_id == thread_id,
+                top_level_run(),
                 AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
             )
         )
     ).scalar_one_or_none()
     if active is None:
         return
+    if active.status == JobStatus.DELEGATED.value:
+        # Never abandoned by a new turn: only Stop/Cancel on the child, or the
+        # child's end, releases a delegated parent.
+        raise HandoffInProgress()
     if (
         active.status == JobStatus.AWAITING_CONFIRMATION.value
         and active.user_id == _coerce_uuid(user_id)
@@ -1054,6 +1064,7 @@ async def accept_submission(
             await db.execute(
                 select(AgentRun.job_id).where(
                     AgentRun.thread_id == thread_uuid,
+                    top_level_run(),
                     AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                 )
             )

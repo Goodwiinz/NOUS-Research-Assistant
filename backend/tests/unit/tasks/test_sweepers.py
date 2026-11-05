@@ -361,6 +361,57 @@ async def test_awaiting_confirmation_respects_longer_window(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_delegated_handoff_parent_is_never_swept(session_factory):
+    """A handoff parent waits on its child Codex run with no time limit.
+
+    Mutation check: drop the ``DELEGATED`` exclusion in
+    ``agent_run_service.list_stale_runs`` and the parent is leased and failed
+    as stale.
+    """
+    parent_id = await _seed(session_factory, status="delegated", updated_at=VERY_STALE)
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, parent_id))[0] == "delegated"
+    assert (await _lease(session_factory, parent_id))[0] is None  # never claimed
+    assert result["scanned"] == 0
+    assert result["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_waiting_handoff_parents_do_not_starve_the_sweeper(session_factory):
+    """Delegated parents can wait indefinitely ("wait until cancel"), so they
+    must not fill the sweeper's oldest-first batch of 100 and hide a newer
+    stale run behind them.
+
+    Mutation check: drop the ``DELEGATED`` exclusion in ``list_stale_runs``
+    and the batch is all parents, so the ordinary run is never reached.
+    """
+    async with session_factory() as db:
+        for _ in range(101):  # more than the sweeper's batch limit of 100
+            db.add(
+                AgentRun(
+                    job_id=str(uuid.uuid4()),
+                    user_id=uuid.uuid4(),
+                    status="delegated",
+                    created_at=VERY_STALE,
+                    updated_at=VERY_STALE,
+                )
+            )
+        await db.commit()
+    # Stale, but newer than every parent: last in the oldest-first ordering.
+    stale_id = await _seed(session_factory, status="running", updated_at=STALE)
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, stale_id))[0] == "failed"
+    assert result["scanned"] == 1
+    assert result["failed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_live_store_terminal_repairs_instead_of_failing(session_factory):
     """Projection missed the terminal write (fire-and-forget lost): the run
     actually completed — repair the projection, don't fail a finished run."""

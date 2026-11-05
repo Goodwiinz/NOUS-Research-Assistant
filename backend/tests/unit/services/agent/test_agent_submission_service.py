@@ -8,7 +8,7 @@ producing a second one.
 
 Everything runs against SQLite, which carries the same partial unique indexes
 the accept path depends on (``uq_agent_runs_user_idempotency_key``,
-``uq_agent_runs_active_thread``, ``uq_agent_outbox_run``) because the models
+``uq_agent_runs_active_thread``, ``uq_agent_outbox_run_kind``) because the models
 declare ``sqlite_where`` alongside ``postgresql_where``. True cross-connection
 contention needs PostgreSQL; the race is therefore driven deterministically by
 suppressing the pre-insert lookup, which is exactly the state a losing racer
@@ -391,6 +391,46 @@ async def test_thread_rejects_active_writer_until_it_is_terminal(
     assert [e.event_type for e in closing] == [
         RunEventType.RUN_CREATED.value,
     ]
+
+
+async def test_insert_race_with_a_handoff_family_conflicts(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The accept fallback re-read ignores the parent's handoff child.
+
+    A ``delegated`` parent and its running Codex child share the thread. The
+    pre-insert check is suppressed (the racer's snapshot predates the parent),
+    so the real index violation reaches the ``IntegrityError`` fallback.
+
+    Mutation check: drop ``top_level_run()`` from the fallback ``active_job_id``
+    select in ``accept_submission`` and this fails with ``MultipleResultsFound``.
+    """
+    parent_id = str(uuid.uuid4())
+    for job_id, status, parent, provider in (
+        (parent_id, JobStatus.DELEGATED.value, None, "nous"),
+        (str(uuid.uuid4()), JobStatus.RUNNING.value, parent_id, "codex"),
+    ):
+        db.add(
+            AgentRun(
+                job_id=job_id,
+                organization_id=ORG_A,
+                user_id=USER_A,
+                thread_id=THREAD_ID,
+                status=status,
+                parent_run_id=parent,
+                execution_provider=provider,
+            )
+        )
+        await db.commit()
+
+    async def racer_saw_no_active_run(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(submission_mod, "_ensure_thread_idle", racer_saw_no_active_run)
+    with pytest.raises(ActiveRunConflict):
+        await accept_submission(
+            db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+        )
 
 
 async def test_fresh_turn_atomically_abandons_awaiting_confirmation(

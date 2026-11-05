@@ -18249,9 +18249,12 @@ export interface components {
          *     queued → running ⇄ awaiting_confirmation → completed|failed|cancelled,
          *     with stopping as a visible transient before cancelled. Both are
          *     non-terminal; terminal states are absorbing.
+         *
+         *     ``DELEGATED`` is a third non-terminal pause: the graph waits on a child
+         *     Codex run (``agent_runs.parent_run_id``) and resumes when it ends.
          * @enum {string}
          */
-        JobStatus: "queued" | "running" | "awaiting_confirmation" | "stopping" | "recovering" | "completed" | "failed" | "cancelled";
+        JobStatus: "queued" | "running" | "awaiting_confirmation" | "stopping" | "recovering" | "delegated" | "completed" | "failed" | "cancelled";
         /** JobStatusResponse */
         JobStatusResponse: {
             /** Confirmation */
