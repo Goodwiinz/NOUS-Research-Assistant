@@ -26,9 +26,11 @@ duplicated:
   risk as a side effect of consolidating onto the one already-working
   implementation — not a separate behavior change.
 - **Delete**: a genuine permission conflict. ``ChatService.delete_message``
-  allows the message's *author* (or a workspace admin) to delete it; the
-  standalone router requires *edit* rights and never checks authorship. See
-  ``delete_message``'s ``require_author_or_admin`` flag.
+  allows the message's *author* (or a workspace admin) to delete it, even as
+  a viewer; the standalone router requires *edit* rights and, since
+  2026-11-05, the author or a workspace admin for a human-authored message
+  (so a viewer cannot delete even their own). See ``delete_message``'s
+  ``require_author_or_admin`` flag.
 """
 
 from datetime import datetime
@@ -304,10 +306,11 @@ async def delete_message(
     ``require_author_or_admin=False`` (router-canonical default): requires
     edit rights, matching every other mutator in the router, and a
     human-authored message additionally needs its author or a workspace
-    admin; assistant/system messages stay editor-deletable. ``True`` (old
-    ``ChatService`` default, preserved for its own — currently uncalled —
-    callers): the message's author may always delete it even as a plain
-    editor/viewer; anyone else needs admin rights.
+    admin; assistant/system messages stay editor-deletable. ``True``
+    (``ChatService.delete_message``, reached by the legacy
+    ``DELETE /api/v2/threads/{thread_id}/messages/{message_id}`` route): the
+    message's author may always delete it even as a plain editor/viewer;
+    anyone else needs admin rights.
     """
     message = await workspace_access.get_message(
         db, message_id, user_id, thread_id=thread_id

@@ -1017,8 +1017,9 @@ class ChatService:
         Delegates with ``require_author_or_admin=True`` — this class's
         pre-4.3 permission rule: the message's author may always delete it,
         anyone else needs admin rights. The standalone router endpoint
-        requires only edit rights and never checks authorship (passes
-        ``require_author_or_admin=False``). Returns ``False`` on not-found
+        (``require_author_or_admin=False``) requires edit rights plus, for a
+        human-authored message, the author or an admin. Returns ``False`` on
+        not-found
         *or* insufficient permission, matching the pre-4.3 undifferentiated
         result.
         """
