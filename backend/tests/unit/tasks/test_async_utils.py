@@ -51,3 +51,34 @@ def test_run_async_loop_is_not_the_callers_thread_loop():
     # Caller has no running loop; the coroutine still completes because it runs
     # on the helper's background loop.
     assert run_async(coro()) == "ok"
+
+
+@pytest.mark.unit
+def test_task_modules_use_the_shared_loop_only():
+    """Audit 2026-11: these workers also run coroutines through ``run_async``
+    on the persistent per-process loop, so a per-call ``asyncio.run`` /
+    ``new_event_loop`` here creates resources (pooled async engine
+    connections, the cached lightweight-LLM httpx client) on a loop that is
+    then closed, and the next use raises "Event loop is closed" / "attached to
+    a different loop". Route every coroutine through ``run_async``."""
+    import ast
+    from pathlib import Path
+
+    tasks_dir = Path(__file__).resolve().parents[3] / "src" / "tasks"
+    banned = {("asyncio", "run"), ("asyncio", "new_event_loop")}
+    offenders = []
+    for name in ("processing_tasks.py", "research_tasks.py"):
+        tree = ast.parse((tasks_dir / name).read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            owner = node.func.value
+            if (
+                isinstance(owner, ast.Name) and (owner.id, node.func.attr) in banned
+            ) or node.func.attr == "run_until_complete":
+                offenders.append(f"{name}:{node.lineno}")
+    assert not offenders, "per-call event loops in Celery tasks: " + ", ".join(
+        offenders
+    )

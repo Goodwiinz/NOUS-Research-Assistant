@@ -650,7 +650,7 @@ def _run_llm_job(
     service = MagicMock()
     service.extract_entities = MagicMock(return_value=extraction)
     monkeypatch.setattr(pt, "LLMEntityExtractionService", lambda: service)
-    monkeypatch.setattr(pt.asyncio, "run", lambda value: value)
+    monkeypatch.setattr(pt, "run_async", lambda value: value)
     monkeypatch.setattr(pt, "knowledge_graph_service", kg)
     pt.kg_extract_entities_job.apply(args=("job-1",))
     return captured
