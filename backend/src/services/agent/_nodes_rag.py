@@ -1294,6 +1294,36 @@ async def _try_primary_do_kb_read_impl(
         return None
 
 
+def _fallback_evidence_text(result: Any) -> str:
+    """Evidence text for one hybrid-search hit.
+
+    Fulltext results never carry ``metadata["full_text"/"text"]``, and their
+    ``content_preview`` is just the first 300 characters of the document, so
+    using it handed the LLM each document's opening instead of the passage
+    that matched. Prefer the query-matched snippets (whole sentences around
+    the ``ts_headline`` hits), and keep the preview only as a last resort.
+    """
+    # The fulltext service owns the highlight markup; strip with its pattern.
+    from src.services.search.fulltext_search_service import _HIGHLIGHT_TAGS
+
+    metadata = getattr(result, "metadata", {}) or {}
+    full_text = metadata.get("full_text") or metadata.get("text")
+    if full_text:
+        return str(full_text)
+    title = (getattr(result, "title", "") or "").strip().casefold()
+    passages: List[str] = []
+    for snippet in getattr(result, "snippets", None) or []:
+        text = _HIGHLIGHT_TAGS.sub("", getattr(snippet, "text", "") or "").strip()
+        # Fulltext also emits the highlighted *title* as a snippet; it is not
+        # body evidence (the title is sent separately).
+        if not text or text.casefold() == title or text in passages:
+            continue
+        passages.append(text)
+    if passages:
+        return "\n...\n".join(passages)
+    return getattr(result, "content_preview", None) or ""
+
+
 @_maybe_traced_retriever("hybrid_search_retriever")
 async def _legacy_hybrid_search_fallback(
     query: str,
@@ -1382,10 +1412,7 @@ async def _legacy_hybrid_search_fallback(
         for i, result in enumerate(search_response.results[:5]):
             doc_id = getattr(result, "document_id", None)
             title = getattr(result, "title", "Untitled") or f"Document {i + 1}"
-            metadata = getattr(result, "metadata", {}) or {}
-            content = metadata.get("full_text") or metadata.get("text", "")
-            if not content:
-                content = getattr(result, "content_preview", None) or ""
+            content = _fallback_evidence_text(result)
             score = getattr(result, "relevance_score", 0.0)
             contexts.append(
                 {

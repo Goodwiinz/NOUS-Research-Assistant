@@ -75,6 +75,30 @@ def test_sanitize_traced_dead_query_becomes_searchable() -> None:
     assert result == "jailbreak RLHF adversarial prompts"
 
 
+@pytest.mark.unit
+def test_sanitize_keeps_quoted_title_verbatim() -> None:
+    # Stopwords attached to a quote ('"A', 'on') used to be dropped with the
+    # quote itself, leaving 'Survey Large Language Models"': unbalanced, and
+    # passed through to arXiv unchanged because it contains a quote.
+    title = '"A Survey on Large Language Models"'
+    assert _sanitize_arxiv_query(title) == title
+
+
+@pytest.mark.unit
+def test_sanitize_strips_filler_outside_quotes_only() -> None:
+    result = _sanitize_arxiv_query('recent papers on "the transformer" latest')
+    assert result == '"the transformer"'
+    assert result.count('"') == 2
+
+
+@pytest.mark.unit
+def test_sanitize_normalizes_curly_quotes_and_drops_empty_spans() -> None:
+    assert _sanitize_arxiv_query("papers on \u201cAttention Is All You Need\u201d") == (
+        '"Attention Is All You Need"'
+    )
+    assert _sanitize_arxiv_query('papers on "" transformers') == "transformers"
+
+
 # ---------------------------------------------------------------------------
 # _tool_search_arxiv — sort and query sanitisation via mocked service
 # ---------------------------------------------------------------------------
