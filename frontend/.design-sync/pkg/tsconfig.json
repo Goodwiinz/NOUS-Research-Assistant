@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmitOnError": false,
+    "incremental": false,
+    "rootDir": "../..",
+    "outDir": "./types",
+    "plugins": []
+  },
+  "files": ["./index.ts", "../../next-env.d.ts"],
+  "include": ["../../src/types/**/*.d.ts", "../../*.d.ts"],
+  "exclude": []
+}
