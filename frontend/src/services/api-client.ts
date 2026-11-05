@@ -71,6 +71,29 @@ export class APIClient {
   private explicitToken: string | null = null;
   private defaultTimeout: number;
 
+  /**
+   * The one URL-resolution rule for every transport (request, upload,
+   * download, downloadPost, fetchObjectUrl). Absolute and `/api/...` URLs pass
+   * through; anything else is joined onto `baseURL`. A path without a leading
+   * slash used to be glued straight onto the base (`/api/v1knowledge-graph`)
+   * and 404 silently, so it throws outside production and is normalised with
+   * a warning in production.
+   */
+  private resolveUrl(endpoint: string): string {
+    if (endpoint.startsWith('http') || endpoint.startsWith('/api/')) {
+      return endpoint;
+    }
+    if (!endpoint.startsWith('/')) {
+      const message = `APIClient: endpoint "${endpoint}" must start with a leading slash`;
+      if (process.env.NODE_ENV !== 'production') {
+        throw new Error(message);
+      }
+      console.warn(message);
+      return `${this.baseURL}/${endpoint}`;
+    }
+    return `${this.baseURL}${endpoint}`;
+  }
+
   constructor(baseURL: string = API_CONFIG.BASE_URL) {
     this.baseURL = baseURL;
     this.defaultTimeout = API_CONFIG.TIMEOUT_MS || 30000;
@@ -166,11 +189,7 @@ export class APIClient {
       options.retries !== undefined && options.retries !== null;
     const method = (fetchOptions.method ?? 'GET').toUpperCase();
 
-    const url = endpoint.startsWith('http')
-      ? endpoint
-      : endpoint.startsWith('/api/')
-        ? endpoint
-        : `${this.baseURL}${endpoint}`;
+    const url = this.resolveUrl(endpoint);
 
     const controller = new AbortController();
     const callerSignal = fetchOptions.signal;
@@ -261,14 +280,11 @@ export class APIClient {
       await this.ensureAuth(accountSignal);
       accountSignal.throwIfAborted();
 
-      const response = await fetch(
-        endpoint.startsWith('http') ? endpoint : `${this.baseURL}${endpoint}`,
-        {
-          ...options,
-          signal,
-          headers: this.mergeHeaders(options.headers, options.body),
-        }
-      );
+      const response = await fetch(this.resolveUrl(endpoint), {
+        ...options,
+        signal,
+        headers: this.mergeHeaders(options.headers, options.body),
+      });
 
       if (!response.ok) {
         throw await this.handleErrorResponse(response);
@@ -507,9 +523,7 @@ export class APIClient {
   ): Promise<T> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      const url = endpoint.startsWith('http')
-        ? endpoint
-        : `${this.baseURL}${endpoint}`;
+      const url = this.resolveUrl(endpoint);
 
       xhr.open('POST', url);
 
@@ -600,13 +614,10 @@ export class APIClient {
     await this.ensureAuth(accountSignal);
     accountSignal.throwIfAborted();
 
-    const response = await fetch(
-      url.startsWith('http') ? url : `${this.baseURL}${url}`,
-      {
-        headers: this.getHeaders(),
-        signal: accountSignal,
-      }
-    );
+    const response = await fetch(this.resolveUrl(url), {
+      headers: this.getHeaders(),
+      signal: accountSignal,
+    });
 
     if (!response.ok) {
       throw await this.handleErrorResponse(response);
@@ -641,15 +652,12 @@ export class APIClient {
     await this.ensureAuth(accountSignal);
     accountSignal.throwIfAborted();
 
-    const response = await fetch(
-      url.startsWith('http') ? url : `${this.baseURL}${url}`,
-      {
-        method: 'POST',
-        headers: this.getHeaders(),
-        signal: accountSignal,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      }
-    );
+    const response = await fetch(this.resolveUrl(url), {
+      method: 'POST',
+      headers: this.getHeaders(),
+      signal: accountSignal,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
 
     if (!response.ok) {
       throw await this.handleErrorResponse(response);
@@ -751,13 +759,10 @@ export class APIClient {
       await this.ensureAuth(signal);
       signal.throwIfAborted();
 
-      const response = await fetch(
-        url.startsWith('http') ? url : `${this.baseURL}${url}`,
-        {
-          headers: this.getHeaders(),
-          signal,
-        }
-      );
+      const response = await fetch(this.resolveUrl(url), {
+        headers: this.getHeaders(),
+        signal,
+      });
 
       if (!response.ok) {
         throw await this.handleErrorResponse(response);
