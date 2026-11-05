@@ -82,3 +82,30 @@ def test_task_modules_use_the_shared_loop_only():
     assert not offenders, "per-call event loops in Celery tasks: " + ", ".join(
         offenders
     )
+
+
+@pytest.mark.unit
+def test_run_async_waits_for_cancelled_coroutine_to_unwind():
+    """On timeout/soft time limit run_async cancels the coroutine and
+    re-raises. It must not return control to the task thread (whose except
+    handler runs db.rollback() on the same sync Session) while the coroutine
+    is still unwinding on the loop thread (audit 2026-11 review)."""
+    import concurrent.futures
+    import time
+
+    unwound = {}
+
+    async def slow():
+        try:
+            await asyncio.sleep(10)
+        finally:
+            # Cleanup that itself awaits, like an async client closing.
+            await asyncio.sleep(0.3)
+            unwound["at"] = time.monotonic()
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        run_async(slow(), timeout=0.05)
+    raised_at = time.monotonic()
+
+    assert "at" in unwound, "run_async returned before the coroutine unwound"
+    assert unwound["at"] <= raised_at
