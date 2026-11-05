@@ -10,7 +10,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CANONICAL_NODE = "24"
 CANONICAL_PNPM = "pnpm@10.18.2"
-CANONICAL_NEXT = "16.2.11"
+CANONICAL_NEXT = "16.4.5"
 CANONICAL_REACT = "18.3.1"
 REFERENCE_SCAN_EXCLUDED_DIRS = {
     ".git",
