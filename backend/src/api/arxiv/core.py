@@ -366,10 +366,27 @@ async def get_arxiv_categories(current_user: UserResponse = Depends(get_current_
     }
 
 
+def _validated_paper_id(paper_id: str) -> str:
+    """Reject a malformed arXiv id with 422 before the endpoint runs.
+
+    A dependency rather than a ``Path(pattern=...)`` constraint so the public
+    OpenAPI contract for this parameter is unchanged.
+    """
+    if not _ARXIV_ID_PATTERN.fullmatch(paper_id):
+        raise HTTPException(status_code=422, detail="Invalid arXiv paper id")
+    return paper_id
+
+
 @router.get("/download/{paper_id}")
 @metered_expensive_work
 async def download_paper(
-    paper_id: str, current_user: UserResponse = Depends(get_current_user)
+    # Auth first, so an anonymous caller gets 401 rather than reaching the id
+    # validator.
+    current_user: UserResponse = Depends(get_current_user),
+    # Validated in a dependency, not the body: @metered_expensive_work debits
+    # the org budget before the body runs, and the id feeds both the shared
+    # cache path and the arxiv.org URL (audit 2026-11 F4b).
+    paper_id: str = Depends(_validated_paper_id),
 ):
     """
     Download PDF for a specific arXiv paper

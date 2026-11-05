@@ -1,6 +1,6 @@
 # A/B Testing System Architecture for Multimodal Enterprise RAG
 
-> **Design document, unverified as of 2026-10-17: this describes an intended A/B testing architecture. Partial code exists (`backend/src/schemas/ab_testing.py`, `backend/src/auth/ab_testing_auth.py`), but the document was not checked against it, and it does not show that any experiment runs in a deployment.**
+> **Design document, unverified as of 2026-10-17: this describes an intended A/B testing architecture. Partial code exists (`backend/src/schemas/ab_testing.py`; the unused `backend/src/auth/ab_testing_auth.py` was removed on 2026-11-05), but the document was not checked against it, and it does not show that any experiment runs in a deployment.**
 
 ## Overview
 

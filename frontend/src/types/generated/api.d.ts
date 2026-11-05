@@ -10791,7 +10791,8 @@ export interface paths {
          * Regenerate Thread Summary
          * @description Regenerate AI summary for a thread.
          *
-         *     Forces regeneration regardless of rate limits.
+         *     Bypasses the summarization service's staleness throttle (force=True); the
+         *     HTTP endpoint itself is rate limited per user. Requires edit rights.
          */
         post: operations["regenerate_thread_summary_api_v2_threads__thread_id__summarize_post"];
         delete?: never;
