@@ -136,6 +136,11 @@ export const GraphHealthMonitor: React.FC = () => {
         )
       ),
     refetchInterval: autoRefresh ? 30000 : false, // Refresh every 30s
+    // A health monitor reports current state: fetch on every mount (the app
+    // default caches for 5 min) and surface a failure at once instead of
+    // after three backoff retries.
+    staleTime: 0,
+    retry: false,
   });
 
   useEffect(() => {
