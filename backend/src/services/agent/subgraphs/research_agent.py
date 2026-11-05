@@ -307,7 +307,10 @@ def _direct_arxiv_search_message(
             {
                 "id": f"direct_search_arxiv_{uuid4().hex}",
                 "name": "search_arxiv",
-                "args": {"query": query, "max_results": 5, "recency_days": 365},
+                # No explicit recency_days: search_arxiv applies its default
+                # 12-month window and widens it when empty, so a title lookup
+                # of an older paper still resolves.
+                "args": {"query": query, "max_results": 5},
             }
         ],
     )

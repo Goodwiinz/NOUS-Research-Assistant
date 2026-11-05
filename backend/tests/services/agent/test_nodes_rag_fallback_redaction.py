@@ -136,3 +136,86 @@ async def test_hybrid_fallback_fails_closed_for_empty_project() -> None:
 
     assert contexts == []
     search.assert_not_called()
+
+
+# --- Evidence content: the matched passage, not the document's opening -----
+#
+# Fulltext never sets metadata["full_text"/"text"], so the fallback used to fall
+# through to content_preview, which is content_text[:300]: the LLM was given
+# the first 300 characters of each document instead of the passage that
+# matched the query (audit 2026-11, retrieval #3).
+
+
+def _snippet(text: str) -> SimpleNamespace:
+    return SimpleNamespace(text=text)
+
+
+async def test_hybrid_fallback_requests_snippets() -> None:
+    from src.services.agent._nodes_rag import _legacy_hybrid_search_fallback
+
+    captured = {}
+
+    def search(**kwargs):
+        captured["request"] = kwargs["search_request"]
+        return SimpleNamespace(results=[])
+
+    with patch(
+        "src.services.search.hybrid_search_service.hybrid_search_service.search",
+        side_effect=search,
+    ):
+        await _legacy_hybrid_search_fallback(
+            query="attention heads", user_id="u-1", organization_id="o-1"
+        )
+
+    assert captured["request"].include_snippets is True
+
+
+async def test_hybrid_fallback_uses_matched_snippets_over_preview() -> None:
+    from src.services.agent._nodes_rag import _legacy_hybrid_search_fallback
+
+    result = SimpleNamespace(
+        document_id="11111111-1111-1111-1111-111111111111",
+        title="Transformers",
+        metadata={},
+        content_preview="Abstract. This opening paragraph is unrelated...",
+        snippets=[
+            _snippet("Each <mark>attention</mark> <mark>head</mark> attends."),
+            _snippet("Multi-<mark>head</mark> layers are stacked six times."),
+        ],
+        relevance_score=0.9,
+    )
+    with patch(
+        "src.services.search.hybrid_search_service.hybrid_search_service.search",
+        return_value=SimpleNamespace(results=[result]),
+    ):
+        contexts = await _legacy_hybrid_search_fallback(
+            query="attention heads", user_id="u-1", organization_id="o-1"
+        )
+
+    content = contexts[0]["content"]
+    assert "Each attention head attends." in content
+    assert "Multi-head layers are stacked six times." in content
+    assert "<mark>" not in content and "</mark>" not in content
+    assert "opening paragraph is unrelated" not in content
+
+
+async def test_hybrid_fallback_uses_preview_when_no_snippets() -> None:
+    from src.services.agent._nodes_rag import _legacy_hybrid_search_fallback
+
+    result = SimpleNamespace(
+        document_id="11111111-1111-1111-1111-111111111111",
+        title="Doc",
+        metadata={},
+        content_preview="only the preview",
+        snippets=[],
+        relevance_score=0.5,
+    )
+    with patch(
+        "src.services.search.hybrid_search_service.hybrid_search_service.search",
+        return_value=SimpleNamespace(results=[result]),
+    ):
+        contexts = await _legacy_hybrid_search_fallback(
+            query="q", user_id="u-1", organization_id="o-1"
+        )
+
+    assert contexts[0]["content"] == "only the preview"
