@@ -84,7 +84,7 @@ services:
       - SUPABASE_STORAGE_TEMP_DIR=/tmp/rag_storage
     command: >-
       sh -lc "python -m pip show langgraph >/dev/null 2>&1 ||
-      python -m pip install --no-cache-dir 'langgraph>=0.4,<2.0' &&
+      python -m pip install --no-cache-dir 'langgraph>=1.2.20,<2.0' &&
       exec uvicorn src.main:app --host 0.0.0.0 --port 8000"
     volumes:
       - ./backend:/app

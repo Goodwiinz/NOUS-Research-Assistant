@@ -16,9 +16,15 @@ cannot release a newer approval. No database schema migration is needed.
 The resume producer verifies the receipt against the saved interrupt before
 dispatch and passes an interrupt-ID-keyed `Command.resume`. A deferred job
 first verifies that it still owns the claimed approval; stale jobs cannot
-execute or finalize a later phase. A nested gate gets a new receipt. LangGraph
-can reuse an interrupt ID for sequential interrupts in one node, so the
-checkpoint and action bindings are essential even with keyed resume values.
+execute or finalize a later phase. A nested gate gets a new receipt.
+Sequential interrupts in one node share the saved checkpoint ID, so the
+checkpoint does not separate them: the action binding and the interrupt ID do.
+LangGraph <=1.2.19 reused one interrupt ID for such interrupts (two gates with
+identical payloads then produced the same approval ID); 1.2.20 issues a fresh
+ID per call, and `backend/requirements.txt` requires `langgraph>=1.2.20`. The
+interrupt-ID-keyed resume value is defense in depth, not the fence: LangGraph
+also accepts a resume keyed by the task's first interrupt ID, so the digest
+check in `require_approval` is what rejects a stale receipt.
 
 The graph's existing single-card behavior is retained: the receipt identifies
 the first pending interrupt and its entire tool batch. This is not a new
