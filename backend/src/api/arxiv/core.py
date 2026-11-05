@@ -380,11 +380,13 @@ def _validated_paper_id(paper_id: str) -> str:
 @router.get("/download/{paper_id}")
 @metered_expensive_work
 async def download_paper(
+    # Auth first, so an anonymous caller gets 401 rather than reaching the id
+    # validator.
+    current_user: UserResponse = Depends(get_current_user),
     # Validated in a dependency, not the body: @metered_expensive_work debits
     # the org budget before the body runs, and the id feeds both the shared
     # cache path and the arxiv.org URL (audit 2026-11 F4b).
     paper_id: str = Depends(_validated_paper_id),
-    current_user: UserResponse = Depends(get_current_user),
 ):
     """
     Download PDF for a specific arXiv paper

@@ -517,15 +517,13 @@ class ChatService:
                                 f"Failed to queue resolution summary for thread {thread_id}: {e}"
                             )
 
-            except Exception as e:
+            except Exception:
                 # Rollback on any error
                 await self.db.rollback()
-                logger.error(f"Atomic bulk update failed: {e}")
-                # Return all as failed
+                logger.error("Atomic bulk update failed", exc_info=True)
+                # Return all as failed (stable message; details stay in the log)
                 for thread_id in thread_ids:
-                    results.append(
-                        (thread_id, False, f"Atomic operation failed: {str(e)}", None)
-                    )
+                    results.append((thread_id, False, "Atomic operation failed", None))
         else:
             # Best-effort mode: continue on errors
             for thread_id in thread_ids:
@@ -542,9 +540,11 @@ class ChatService:
                                 None,
                             )
                         )
-                except Exception as e:
-                    logger.error(f"Error updating thread {thread_id}: {e}")
-                    results.append((thread_id, False, str(e), None))
+                except Exception:
+                    # Stable public message; the exception (SQL text, bound
+                    # values) goes to the log only.
+                    logger.error("Error updating thread %s", thread_id, exc_info=True)
+                    results.append((thread_id, False, "Failed to update thread", None))
 
         return results
 
@@ -595,15 +595,13 @@ class ChatService:
                     results.append((thread_id, True, None))
                     logger.info(f"Deleted thread: {thread_id}")
 
-            except Exception as e:
+            except Exception:
                 # Rollback on any error
                 await self.db.rollback()
-                logger.error(f"Atomic bulk delete failed: {e}")
-                # Return all as failed
+                logger.error("Atomic bulk delete failed", exc_info=True)
+                # Return all as failed (stable message; details stay in the log)
                 for thread_id in thread_ids:
-                    results.append(
-                        (thread_id, False, f"Atomic operation failed: {str(e)}")
-                    )
+                    results.append((thread_id, False, "Atomic operation failed"))
         else:
             # Best-effort mode: continue on errors
             for thread_id in thread_ids:
@@ -619,9 +617,9 @@ class ChatService:
                                 "Thread not found or insufficient permissions",
                             )
                         )
-                except Exception as e:
-                    logger.error(f"Error deleting thread {thread_id}: {e}")
-                    results.append((thread_id, False, str(e)))
+                except Exception:
+                    logger.error("Error deleting thread %s", thread_id, exc_info=True)
+                    results.append((thread_id, False, "Failed to delete thread"))
 
         return results
 
@@ -653,6 +651,16 @@ class ChatService:
                     )
                     continue
 
+                # get_thread proves read access only (any user on a public
+                # workspace). A forced re-summarize overwrites thread.summary
+                # and spends an LLM call, so require edit rights, matching the
+                # single-thread /summarize route (audit 2026-11 F7).
+                if not thread.conversation.workspace.can_user_edit(str(user_id)):
+                    results.append(
+                        (thread_id, False, "Insufficient permissions", thread)
+                    )
+                    continue
+
                 # Trigger async summarization task
                 # We use force=True to ensure a fresh summary is generated for manual bulk requests
                 try:
@@ -660,17 +668,22 @@ class ChatService:
 
                     summarize_thread_task.delay(str(thread_id), force=True)
                     results.append((thread_id, True, None, thread))
-                except Exception as e:
+                except Exception:
+                    # Stable message: broker errors can carry connection URLs.
                     logger.error(
-                        f"Failed to queue summarization for thread {thread_id}: {e}"
+                        "Failed to queue summarization for thread %s",
+                        thread_id,
+                        exc_info=True,
                     )
                     results.append(
-                        (thread_id, False, f"Failed to queue task: {str(e)}", thread)
+                        (thread_id, False, "Failed to queue summarization", thread)
                     )
 
-            except Exception as e:
-                logger.error(f"Error in bulk summarize for thread {thread_id}: {e}")
-                results.append((thread_id, False, str(e), None))
+            except Exception:
+                logger.error(
+                    "Error in bulk summarize for thread %s", thread_id, exc_info=True
+                )
+                results.append((thread_id, False, "Failed to summarize thread", None))
 
         return results
 

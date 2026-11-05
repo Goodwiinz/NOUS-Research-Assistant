@@ -249,3 +249,45 @@ def test_jwt_decode_only_in_allowlisted_modules() -> None:
     assert (
         not offenders
     ), "jwt.decode outside the verified auth paths (audit F16): " + ", ".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# F5b — bulk thread results must not carry raw exception text
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_thread_results_do_not_leak_exception_text() -> None:
+    """BulkThreadResult.error is returned to the client, so the bulk
+    update/delete/summarize paths must append stable messages, never str(e)
+    or an f-string over the caught exception."""
+    path = SRC / "services" / "threads" / "chat_service.py"
+    tree = ast.parse(path.read_text())
+    exc_names = {"e", "exc", "ex", "error", "err"}
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "append"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "results"
+        ):
+            continue
+        for sub in ast.walk(node):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id == "str"
+                and sub.args
+                and isinstance(sub.args[0], ast.Name)
+                and sub.args[0].id in exc_names
+            ) or (
+                isinstance(sub, ast.FormattedValue)
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id in exc_names
+            ):
+                offenders.append(node.lineno)
+    assert not offenders, (
+        "bulk results interpolate raw exception text (audit F5b) at "
+        f"chat_service.py lines {sorted(set(offenders))}"
+    )
