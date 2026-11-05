@@ -469,8 +469,9 @@ def process_document_ingestion(self, job_id: str):
         job.update_progress("Extracting text content", 20)
         commit_if_active()
 
-        # Run async function in a managed event loop
-        text_extraction_result = asyncio.run(
+        # Shared per-process loop (run_async), not a per-call asyncio.run: see
+        # src/tasks/_async_utils.py for why cached async clients need one loop.
+        text_extraction_result = run_async(
             processing_service.process_text_extraction(document)
         )
 
@@ -517,17 +518,11 @@ def process_document_ingestion(self, job_id: str):
         commit_if_active()
 
         if document.content_text:
-            # Run entity extraction in event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                entities = loop.run_until_complete(
-                    processing_service.process_entity_extraction(
-                        document, document.content_text
-                    )
+            entities = run_async(
+                processing_service.process_entity_extraction(
+                    document, document.content_text
                 )
-            finally:
-                loop.close()
+            )
 
             # Replay-safe write: drop any spaCy/regex entities left by a prior
             # crashed run for this document before inserting the fresh set, so an
@@ -759,13 +754,13 @@ def extract_text_content(self, job_id: str):
         job.start_job(worker_id=self.request.id)
         db.commit()
 
-        # Extract text. process_text_extraction is async — run it in a managed
-        # event loop (mirrors the process_document task and extract_entities).
-        # Calling it without asyncio.run returned a coroutine, so the next line
+        # Extract text. process_text_extraction is async — run it on the shared
+        # loop (run_async, like the process_document task and extract_entities).
+        # Calling it without running it returned a coroutine, so the next line
         # (result["text_content"]) raised "'coroutine' object is not
         # subscriptable" and this task failed on every document.
         processing_service = ProcessingPipeline(db)
-        result = asyncio.run(processing_service.process_text_extraction(document))
+        result = run_async(processing_service.process_text_extraction(document))
 
         # Update document
         document.content_text = result["text_content"]
@@ -839,11 +834,11 @@ def extract_entities(self, job_id: str):
         job.start_job(worker_id=self.request.id)
         db.commit()
 
-        # Extract entities. asyncio.run creates + manages a fresh loop;
-        # get_event_loop().run_until_complete raises "no current event loop"
-        # / deprecation on Python 3.10+ in a worker thread.
+        # Extract entities on the shared per-process loop: the lightweight LLM
+        # client is cached per process, so a per-call loop left it bound to a
+        # closed loop on the next task.
         service = LLMEntityExtractionService()
-        extraction_result = asyncio.run(service.extract_entities(document.content_text))
+        extraction_result = run_async(service.extract_entities(document.content_text))
 
         # A timeout that skips chunks (or all-chunks-failed) sets
         # ExtractionResult.error while still returning the entities found so far.
@@ -1128,7 +1123,7 @@ def kg_extract_entities_job(self, job_id: str):
             db.commit()
 
             service = LLMEntityExtractionService()
-            extraction_result = asyncio.run(
+            extraction_result = run_async(
                 service.extract_entities(content, timeout_seconds=300.0)
             )
             if extraction_result.error:
