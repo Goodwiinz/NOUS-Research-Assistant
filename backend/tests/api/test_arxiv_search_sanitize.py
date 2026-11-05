@@ -91,6 +91,14 @@ def test_sanitize_strips_filler_outside_quotes_only() -> None:
     assert result.count('"') == 2
 
 
+@pytest.mark.unit
+def test_sanitize_normalizes_curly_quotes_and_drops_empty_spans() -> None:
+    assert _sanitize_arxiv_query("papers on \u201cAttention Is All You Need\u201d") == (
+        '"Attention Is All You Need"'
+    )
+    assert _sanitize_arxiv_query('papers on "" transformers') == "transformers"
+
+
 # ---------------------------------------------------------------------------
 # _tool_search_arxiv — sort and query sanitisation via mocked service
 # ---------------------------------------------------------------------------

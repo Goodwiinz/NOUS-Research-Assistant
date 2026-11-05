@@ -219,3 +219,28 @@ async def test_hybrid_fallback_uses_preview_when_no_snippets() -> None:
         )
 
     assert contexts[0]["content"] == "only the preview"
+
+
+async def test_hybrid_fallback_title_only_match_keeps_the_preview() -> None:
+    # fulltext puts the highlighted *title* in snippets[0]; when only the title
+    # matched, using it as "content" dropped the preview and just repeated the
+    # title.
+    from src.services.agent._nodes_rag import _legacy_hybrid_search_fallback
+
+    result = SimpleNamespace(
+        document_id="11111111-1111-1111-1111-111111111111",
+        title="Attention Heads",
+        metadata={},
+        content_preview="The body text that did not contain the term.",
+        snippets=[_snippet("<mark>Attention</mark> Heads")],
+        relevance_score=0.7,
+    )
+    with patch(
+        "src.services.search.hybrid_search_service.hybrid_search_service.search",
+        return_value=SimpleNamespace(results=[result]),
+    ):
+        contexts = await _legacy_hybrid_search_fallback(
+            query="attention", user_id="u-1", organization_id="o-1"
+        )
+
+    assert contexts[0]["content"] == "The body text that did not contain the term."

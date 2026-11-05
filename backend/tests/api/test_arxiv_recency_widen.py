@@ -68,7 +68,8 @@ async def test_implicit_window_widens_once_when_empty() -> None:
     assert "submittedDate:" not in second
     assert [p["id"] for p in result["papers"]] == ["1706.03762"]
     assert result["recency_widened"] is True
-    assert "warning" not in result
+    # Labelled, so the model does not present all-time papers as recent.
+    assert "all time" in result["warning"].lower()
 
 
 @pytest.mark.unit
@@ -100,3 +101,29 @@ async def test_discover_papers_or_terms_is_not_widened() -> None:
 
     assert search.await_count == 1
     assert result["papers"] == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_widened_result_is_labelled_for_the_model() -> None:
+    # A widened result must say so: without a warning the model presents
+    # all-time papers as "recent" (review finding on the first version).
+    result, _search = await _run({"query": "some niche topic"})
+
+    assert result["recency_widened"] is True
+    assert "all time" in result["warning"].lower()
+    assert "365" in result["warning"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_default_window_passed_explicitly_still_widens() -> None:
+    # The research prompt teaches the model to pass recency_days=365; that is
+    # the default value, not a narrower intent, so it widens like an omitted
+    # window. Other explicit windows (e.g. 30) never widen.
+    result, search = await _run(
+        {"query": "Attention Is All You Need", "recency_days": 365}
+    )
+
+    assert search.await_count == 2
+    assert result["recency_widened"] is True
