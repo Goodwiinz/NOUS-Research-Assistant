@@ -148,7 +148,14 @@ def test_route_accepts_order_query_param_and_forwards(
     received: dict = {}
 
     async def fake_list_messages(
-        thread_id, user_id, limit=100, offset=0, before_id=None, since=None, order="asc"
+        thread_id,
+        user_id,
+        limit=100,
+        offset=0,
+        before_id=None,
+        since=None,
+        order="asc",
+        **_extra,  # newer service kwargs (selected_message_id, branch_metadata, ...)
     ):
         received["order"] = order
         return [], 0
@@ -196,7 +203,14 @@ def test_route_defaults_order_to_asc(test_app, test_auth_headers, monkeypatch):
     received: dict = {}
 
     async def fake_list_messages(
-        thread_id, user_id, limit=100, offset=0, before_id=None, since=None, order="asc"
+        thread_id,
+        user_id,
+        limit=100,
+        offset=0,
+        before_id=None,
+        since=None,
+        order="asc",
+        **_extra,  # newer service kwargs (selected_message_id, branch_metadata, ...)
     ):
         received["order"] = order
         return [], 0

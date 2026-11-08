@@ -100,7 +100,14 @@ def test_route_accepts_since_query_param_and_forwards_to_service(
     received: dict = {}
 
     async def fake_list_messages(
-        thread_id, user_id, limit=100, offset=0, before_id=None, since=None, order="asc"
+        thread_id,
+        user_id,
+        limit=100,
+        offset=0,
+        before_id=None,
+        since=None,
+        order="asc",
+        **_extra,  # newer service kwargs (selected_message_id, branch_metadata, ...)
     ):
         received["thread_id"] = thread_id
         received["since"] = since
