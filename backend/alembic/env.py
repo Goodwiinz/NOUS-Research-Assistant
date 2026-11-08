@@ -83,38 +83,6 @@ def _normalize_json_default(value):
     return text.strip("'")
 
 
-# Columns declared with ``server_default="now()"`` (a Python str, not
-# ``func.now()``). SQLAlchemy renders that as DEFAULT 'now()', a string literal
-# that PostgreSQL folds into a constant when the table is created, so every
-# row defaults to the table's creation time rather than its insert time. The
-# migrated schema matches the models (r6h3_model_baseline creates these tables
-# from them), but Alembic compares the default by evaluating 'now()' again at
-# check time, so the comparison can never be equal. Changing the default is a
-# schema change and needs its own migration; until then these four columns
-# are compared by declaration instead. The list is explicit so a new
-# server_default="now()" is still reported.
-FROZEN_NOW_DEFAULT_COLUMNS = frozenset(
-    {
-        ("encrypted_user_profiles", "created_at"),
-        ("encrypted_organization_profiles", "created_at"),
-        ("encryption_audit_logs", "created_at"),
-        ("entity_relationships", "created_at"),
-    }
-)
-
-_TIMESTAMPTZ_LITERAL_RE = re.compile(r"^'[^']*'::timestamp with time zone$")
-
-
-def _is_frozen_now_default(metadata_column, inspected_default) -> bool:
-    server_default = metadata_column.server_default
-    return (
-        (metadata_column.table.name, metadata_column.name) in FROZEN_NOW_DEFAULT_COLUMNS
-        and getattr(server_default, "arg", None) == "now()"
-        and inspected_default is not None
-        and bool(_TIMESTAMPTZ_LITERAL_RE.match(str(inspected_default).strip()))
-    )
-
-
 def compare_server_default(
     context,
     inspected_column,
@@ -134,12 +102,7 @@ def compare_server_default(
     normalized default text for plain JSON; everything else (JSONB included)
     keeps Alembic's own comparison (``None``).
 
-    The FROZEN_NOW_DEFAULT_COLUMNS above count as equal while the model still
-    declares the string "now()" and the database holds the constant it folded
-    to; any other change to those columns' defaults is still reported.
     """
-    if _is_frozen_now_default(metadata_column, inspected_default):
-        return False
     column_type = metadata_column.type
     if isinstance(column_type, JSON) and not isinstance(column_type, JSONB):
         return _normalize_json_default(inspected_default) != _normalize_json_default(

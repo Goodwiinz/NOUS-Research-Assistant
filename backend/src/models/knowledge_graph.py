@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -785,7 +786,10 @@ entity_categories = Table(
     Column("category_id", GUID(), ForeignKey("categories.id"), primary_key=True),
     Column("confidence", Float, default=1.0, nullable=False),
     Column(
-        "assigned_at", DateTime(timezone=True), server_default="now()", nullable=False
+        "assigned_at",
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
     ),
 )
 
@@ -800,6 +804,6 @@ entity_synonyms = Table(
     ),  # alias, abbreviation, translation, etc.
     Column("confidence", Float, default=1.0, nullable=False),
     Column(
-        "created_at", DateTime(timezone=True), server_default="now()", nullable=False
+        "created_at", DateTime(timezone=True), server_default=func.now(), nullable=False
     ),
 )

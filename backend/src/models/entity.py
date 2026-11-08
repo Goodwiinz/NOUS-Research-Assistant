@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    func,
     text,
 )
 from sqlalchemy.orm import relationship
@@ -47,7 +48,7 @@ entity_relationships = Table(
     Column("confidence", Float, default=1.0, nullable=False),
     Column("relationship_metadata", JSON, nullable=True),
     Column(
-        "created_at", DateTime(timezone=True), server_default="now()", nullable=False
+        "created_at", DateTime(timezone=True), server_default=func.now(), nullable=False
     ),
 )
 
