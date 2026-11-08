@@ -4,7 +4,7 @@ ResearchRun model for tracking execution of a research blueprint.
 
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -25,6 +25,12 @@ class ResearchRun(BaseModel):
     """A single execution of a research blueprint."""
 
     __tablename__ = "research_runs"
+    __table_args__ = (
+        # Created by n9p2q3r4s5t6_add_missing_performance_indexes.
+        Index("idx_research_runs_blueprint", "blueprint_id"),
+        Index("idx_research_runs_status", "status"),
+        Index("idx_research_runs_blueprint_status", "blueprint_id", "status"),
+    )
 
     blueprint_id = Column(GUID(), ForeignKey("research_blueprints.id"), nullable=False)
     blueprint_version = Column(Integer, nullable=False)

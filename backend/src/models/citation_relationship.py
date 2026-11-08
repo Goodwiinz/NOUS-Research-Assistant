@@ -7,6 +7,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -69,6 +70,9 @@ class CitationRelationship(BaseModel):
             "source_citation_id != target_citation_id",
             name="ck_citation_no_self_reference",
         ),
+        # Created by e0g4h5i6j7k8_create_citation_relationships.
+        Index("ix_citation_relationships_source", "source_citation_id"),
+        Index("ix_citation_relationships_target", "target_citation_id"),
     )
 
     def __repr__(self):

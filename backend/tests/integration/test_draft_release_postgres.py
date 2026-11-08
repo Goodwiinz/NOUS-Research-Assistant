@@ -150,7 +150,10 @@ async def _count(factory: Factory, sql: str, **params: Any) -> int:
         return int((await db.execute(text(sql), params)).scalar_one())
 
 
-async def _document(db: AsyncSession, org: UUID, name: str, body: str) -> UUID:
+async def _document(
+    db: AsyncSession, org: UUID, name: str, body: str, checksum: str | None = None
+) -> UUID:
+    """One PDF document; ``checksum`` stands for the file bytes (default: body)."""
     document = Document(
         title=name,
         filename=f"{name}.pdf",
@@ -159,7 +162,7 @@ async def _document(db: AsyncSession, org: UUID, name: str, body: str) -> UUID:
         mime_type="application/pdf",
         document_type=DocumentType.PDF,
         organization_id=org,
-        checksum_sha256=_sha(body),
+        checksum_sha256=checksum or _sha(body),
         content_text=body,
     )
     db.add(document)

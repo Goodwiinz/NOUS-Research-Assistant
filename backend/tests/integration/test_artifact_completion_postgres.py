@@ -751,6 +751,9 @@ async def test_native_intent_foreign_keys_allow_parent_purge(
                     title="purge proof",
                     content=CONTENT,
                     themes=[],
+                    # Several cases share a project, which may hold only one
+                    # current draft (uq_generated_drafts_current).
+                    is_current=False,
                 )
             )
             await db.flush()

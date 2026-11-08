@@ -61,6 +61,8 @@ class Conversation(BaseModel):
         Index("idx_conversation_workspace_archived", "workspace_id", "is_archived"),
         Index("idx_conversation_pinned_activity", "is_pinned", "last_activity_at"),
         Index("idx_conversation_title_search", "title"),
+        # Created by a1b2c3d4e5f6_add_thread_centric_chat_schema.
+        Index("ix_conversations_last_activity", "last_activity_at"),
     )
 
     def __repr__(self):

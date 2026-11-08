@@ -2,7 +2,7 @@
 MessageAttachment model for Terminal Observatory multimodal messages
 """
 
-from sqlalchemy import Column, ForeignKey, String
+from sqlalchemy import Column, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .base import GUID, BaseModel
@@ -17,6 +17,11 @@ class MessageAttachment(BaseModel):
     """
 
     __tablename__ = "message_attachments"
+    __table_args__ = (
+        # Created by a1b2c3d4e5f6_add_thread_centric_chat_schema: a document is
+        # attached to a message at most once.
+        UniqueConstraint("message_id", "document_id", name="uq_message_attachments"),
+    )
 
     # Parent relationships
     message_id = Column(

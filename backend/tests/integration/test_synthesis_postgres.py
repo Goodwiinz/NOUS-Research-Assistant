@@ -159,7 +159,12 @@ async def _setup(factory: Factory) -> Any:
             await db.flush()
             reports[name] = cast(UUID, report.id)
             body = _text(name[0])
-            documents[name] = await _document(db, ids["org"], f"d{name}", body)
+            # A1 and A2 are two files with the same extracted text; distinct
+            # file checksums, since one organization cannot hold two live
+            # documents with one content hash (uq_documents_org_checksum_live).
+            documents[name] = await _document(
+                db, ids["org"], f"d{name}", body, checksum=_sha(f"d{name}.pdf:{body}")
+            )
             if name != "G":  # G joins the project in step 7
                 db.add(
                     CollectionDocument(collection_id=p1, document_id=documents[name])
@@ -285,19 +290,32 @@ async def _release_cause(factory: Factory, release: UUID) -> str | None:
     return cast(str | None, row)
 
 
-async def _draft(w: Any, content: str, title: str) -> UUID:
+async def _draft(w: Any, content: str, title: str, version: int) -> UUID:
     async with w.factory() as db:
+        # One current draft and one row per version per project
+        # (uq_generated_drafts_current / uq_generated_drafts_project_version):
+        # retire the current draft first, as a new draft version does.
+        await db.execute(
+            text(
+                "UPDATE generated_drafts SET is_current = false WHERE project_id = :p"
+            ),
+            {"p": w.p1},
+        )
         draft = GeneratedDraft(
-            project_id=w.p1, version=1, title=title, content=content, is_current=True
+            project_id=w.p1,
+            version=version,
+            title=title,
+            content=content,
+            is_current=True,
         )
         db.add(draft)
         await db.commit()
         return cast(UUID, draft.id)
 
 
-def _check(w: Any, draft: UUID) -> Awaitable[Any]:
+def _check(w: Any, draft: UUID, version: int) -> Awaitable[Any]:
     async def call(db: AsyncSession, ctx: ProjectContext) -> Any:
-        return await draft_release_service.check(db, ctx, draft, 1)
+        return await draft_release_service.check(db, ctx, draft, version)
 
     return _as(w, "O", VIEW, call)
 
@@ -371,14 +389,14 @@ async def test_synthesis_gold_duplicates_validation_successor_and_stale_release(
     assert await _counts(factory) == counts
 
     # 6. Claim link to the pooled SMD; promote the draft (GOO-307).
-    draft1 = await _draft(w, V1, "pooled")
+    draft1 = await _draft(w, V1, "pooled", 1)
     claim1 = await _claim(w, draft1, V1, S1, "c1")
     link1 = await _link(
         w, claim1, "l1", kind="synthesis_result", synthesis_result_id=r1.id
     )
     await _assess(w, claim1, "a1", [link1])
     release1, _ = await _promote(w, "A", draft1, 1, "p1", _sha(V1))
-    draft2 = await _draft(w, V2, "unrelated")
+    draft2 = await _draft(w, V2, "unrelated", 2)
     claim2 = await _claim(w, draft2, V2, S2, "c2")
     link2 = await _link(
         w,
@@ -388,9 +406,9 @@ async def test_synthesis_gold_duplicates_validation_successor_and_stale_release(
         accepted_value_id=w.accepted[("D", "n_i")],
     )
     await _assess(w, claim2, "a2", [link2])
-    release2, _ = await _promote(w, "A", draft2, 1, "p2", _sha(V2))
-    for draft in (draft1, draft2):
-        check = await _check(w, draft)
+    release2, _ = await _promote(w, "A", draft2, 2, "p2", _sha(V2))
+    for draft, version in ((draft1, 1), (draft2, 2)):
+        check = await _check(w, draft, version)
         assert check.release_status == "verified", check.blockers
 
     # 7. Changed input: unit G joins and the table is rebuilt.
