@@ -603,15 +603,33 @@ async def _claim_on(
 async def _release(w: Any, tag: str) -> UUID:
     """One verified GOO-315 release (candidate + verified rows)."""
     async with w.factory() as db:
+        # One row per (project, version) and one current draft per project
+        # (uq_generated_drafts_project_version / uq_generated_drafts_current).
+        version = int(
+            (
+                await db.execute(
+                    text(
+                        "SELECT COALESCE(MAX(version), 0) + 1 FROM generated_drafts "
+                        "WHERE project_id = :p"
+                    ),
+                    {"p": w.p1},
+                )
+            ).scalar_one()
+        )
+        # Not current: the review draft the claims anchor to stays current.
         draft = GeneratedDraft(
-            project_id=w.p1, version=1, title=f"Release {tag}", content=tag
+            project_id=w.p1,
+            version=version,
+            title=f"Release {tag}",
+            content=tag,
+            is_current=False,
         )
         db.add(draft)
         await db.flush()
         draft_release = DraftRelease(
             collection_id=w.p1,
             draft_id=draft.id,
-            draft_version=1,
+            draft_version=version,
             content_hash=_sha(tag),
             claim_version_ids=[],
             assessment_ids=[],
@@ -628,7 +646,7 @@ async def _release(w: Any, tag: str) -> UUID:
                 id=uuid4(),
                 collection_id=w.p1,
                 draft_id=draft.id,
-                draft_version=1,
+                draft_version=version,
                 content_hash=_sha(tag),
                 stage=stage,
                 candidate_release_id=None if not rows else rows[0].id,

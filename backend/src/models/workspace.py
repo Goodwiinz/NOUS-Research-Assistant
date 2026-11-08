@@ -55,7 +55,19 @@ class Workspace(BaseModel):
     organization_id = Column(GUID(), ForeignKey("organizations.id"), nullable=True)
 
     # Database indexes for performance optimization
-    __table_args__ = (Index("idx_workspace_owner_archived", "owner_id", "is_archived"),)
+    __table_args__ = (
+        Index("idx_workspace_owner_archived", "owner_id", "is_archived"),
+        # Plain indexes created by migrations; declared so the models match
+        # what ``alembic upgrade head`` builds. They duplicate each other and
+        # the index above; all exist in every migrated database.
+        # a1b2c3d4e5f6_add_thread_centric_chat_schema:
+        Index("ix_workspaces_owner_id", "owner_id"),
+        Index("ix_workspaces_organization_id", "organization_id"),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_workspaces_owner", "owner_id"),
+        Index("idx_workspaces_organization", "organization_id"),
+        Index("idx_workspaces_owner_archived", "owner_id", "is_archived"),
+    )
 
     # Relationships
     owner = relationship("User", foreign_keys=[owner_id])
@@ -148,6 +160,11 @@ class WorkspaceMember(BaseModel):
     # Database indexes and constraints
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),
+        # The same key under the name a1b2c3d4e5f6_add_thread_centric_chat_schema
+        # gave it; every migrated database carries both constraints.
+        UniqueConstraint(
+            "workspace_id", "user_id", name="uq_workspace_members_workspace_user"
+        ),
     )
 
     # Relationships

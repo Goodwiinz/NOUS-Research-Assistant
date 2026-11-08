@@ -88,6 +88,30 @@ class ChatMessage(BaseModel):
             ),
             sqlite_where=text("parent_message_id IS NOT NULL AND role = 'assistant'"),
         ),
+        # Plain read-path indexes created by migrations; declared so the
+        # models match what ``alembic upgrade head`` builds. The ix_/idx_
+        # pairs on (thread_id, created_at) and (role) are redundant duplicates
+        # from two revisions; both exist in every migrated database.
+        # a1b2c3d4e5f6_add_thread_centric_chat_schema:
+        Index("ix_chat_messages_thread_created", "thread_id", "created_at"),
+        Index("ix_chat_messages_role", "role"),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_chat_messages_thread_created", "thread_id", "created_at"),
+        Index("idx_chat_messages_user", "user_id"),
+        Index("idx_chat_messages_role", "role"),
+        # b2c3d4e5f6g7_add_fulltext_search_for_threads (repaired by
+        # sv01_search_vector_repair). That revision's search_vector column,
+        # its trigger and its two GIN indexes stay migration-owned; see
+        # the MIGRATION_OWNED_*_REVISIONS maps in alembic/env.py.
+        Index("idx_chat_messages_thread_role", "thread_id", "role"),
+        # t8z9a0b1c2d3_add_chat_messages_dedup_index (duplicate-check hot path).
+        Index(
+            "ix_chat_messages_thread_user_role_created",
+            "thread_id",
+            "user_id",
+            "role",
+            text("created_at DESC"),
+        ),
     )
 
     # Parent relationship

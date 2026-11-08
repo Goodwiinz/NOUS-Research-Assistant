@@ -397,7 +397,9 @@ async def _retrieve(
             mime_type="application/pdf",
             document_type=DocumentType.PDF,
             organization_id=world.ids["org"],
-            checksum_sha256="e" * 64,
+            # Unique per call: one organization cannot hold two live documents
+            # with one content hash (uq_documents_org_checksum_live).
+            checksum_sha256=uuid4().hex * 2,
         )
         db.add(document)
         await db.flush()

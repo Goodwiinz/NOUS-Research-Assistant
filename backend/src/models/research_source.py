@@ -2,7 +2,7 @@
 ResearchSource model for external sources discovered during research.
 """
 
-from sqlalchemy import Column, ForeignKey, String, Text
+from sqlalchemy import Column, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -13,6 +13,10 @@ class ResearchSource(BaseModel):
     """An external source (paper, article, etc.) found during a research run."""
 
     __tablename__ = "research_sources"
+    __table_args__ = (
+        # Created by n9p2q3r4s5t6_add_missing_performance_indexes.
+        Index("idx_research_sources_run", "run_id"),
+    )
 
     run_id = Column(GUID(), ForeignKey("research_runs.id"), nullable=False)
     connector_type = Column(String(50), nullable=False)

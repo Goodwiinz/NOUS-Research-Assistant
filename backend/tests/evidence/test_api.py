@@ -120,17 +120,28 @@ def seed_document(
     organization_id=TEST_ORG_ID,
     document_id=None,
     title="Seeded evidence document",
-    content_text="This seeded document contains evidence for the test claim.",
+    content_text=None,
     checksum_sha256=None,
     processing_status=ProcessingStatus.COMPLETED,
     is_deleted=False,
 ):
-    """Insert one caller-owned document with explicit evidence source metadata."""
+    """Insert one caller-owned document with explicit evidence source metadata.
+
+    The checksum defaults to the content's SHA-256, and the module's database
+    outlives each test, so the default content names the document: like
+    production (uq_documents_org_checksum_live), one organization cannot hold
+    two live documents with the same content hash.
+    """
+    document_id = document_id or uuid4()
+    if content_text is None:
+        content_text = (
+            f"This seeded document {document_id} contains evidence for the test claim."
+        )
     checksum = (
         checksum_sha256 or hashlib.sha256(content_text.encode("utf-8")).hexdigest()
     )
     document = Document(
-        id=document_id or uuid4(),
+        id=document_id,
         title=title,
         filename="evidence.txt",
         file_path="/tmp/evidence.txt",
@@ -942,7 +953,7 @@ class TestEvidenceBreakdownEndpoint:
                 db,
                 document_id=source_id,
                 title=f"Source {source_id}",
-                content_text="Equal confidence pagination source content",
+                content_text=f"Equal confidence pagination source content {source_id}",
             )
 
         for source_id in reversed(source_ids):

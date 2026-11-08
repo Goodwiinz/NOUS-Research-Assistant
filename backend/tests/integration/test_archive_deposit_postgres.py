@@ -308,9 +308,28 @@ async def _seed_release(w: Any, tag: str) -> Any:
         k: {"state": "pass", "items": []} for k in manuscript_rules.VERIFIED_OBLIGATIONS
     }
     async with w.factory() as db:
+        # One row per (project, version) and one current draft per project
+        # (uq_generated_drafts_project_version / uq_generated_drafts_current).
+        version = int(
+            (
+                await db.execute(
+                    text(
+                        "SELECT COALESCE(MAX(version), 0) + 1 FROM generated_drafts "
+                        "WHERE project_id = :p"
+                    ),
+                    {"p": w.p1},
+                )
+            ).scalar_one()
+        )
+        await db.execute(
+            text(
+                "UPDATE generated_drafts SET is_current = false WHERE project_id = :p"
+            ),
+            {"p": w.p1},
+        )
         draft = GeneratedDraft(
             project_id=w.p1,
-            version=1,
+            version=version,
             title=f"Draft {tag}",
             content=tag,
             is_current=True,
@@ -320,7 +339,7 @@ async def _seed_release(w: Any, tag: str) -> Any:
         draft_release = DraftRelease(
             collection_id=w.p1,
             draft_id=draft.id,
-            draft_version=1,
+            draft_version=version,
             content_hash=_sha(tag.encode()),
             claim_version_ids=[],
             assessment_ids=[],
@@ -341,7 +360,7 @@ async def _seed_release(w: Any, tag: str) -> Any:
                 id=release_id,
                 collection_id=w.p1,
                 draft_id=draft.id,
-                draft_version=1,
+                draft_version=version,
                 content_hash=_sha(tag.encode()),
                 stage=stage,
                 candidate_release_id=None if candidate is None else candidate.id,

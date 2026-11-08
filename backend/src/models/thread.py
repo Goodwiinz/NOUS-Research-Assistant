@@ -114,6 +114,25 @@ class Thread(BaseModel):
     __table_args__ = (
         Index("idx_thread_conversation_status", "conversation_id", "status"),
         Index("idx_thread_conversation_created", "conversation_id", "created_at"),
+        # Plain read-path indexes created by migrations; declared so the
+        # models match what ``alembic upgrade head`` builds. Several duplicate
+        # each other (ix_/idx_ pairs from two revisions, and the idx_thread_*
+        # pair above); all exist in every migrated database.
+        # a1b2c3d4e5f6_add_thread_centric_chat_schema:
+        Index("ix_threads_status", "status"),
+        Index("ix_threads_last_message_at", "last_message_at"),
+        # i4k8l9m0n1o2_add_project_thread_integration:
+        Index("idx_threads_source_project", "source_project_id"),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_threads_conversation_created", "conversation_id", "created_at"),
+        Index("idx_threads_created_by", "created_by_id"),
+        Index("idx_threads_status", "status"),
+        Index("idx_threads_last_message_at", "last_message_at"),
+        # b2c3d4e5f6g7_add_fulltext_search_for_threads (repaired by
+        # sv01_search_vector_repair). That revision's search_vector column,
+        # its trigger and its two GIN indexes stay migration-owned; see
+        # the MIGRATION_OWNED_*_REVISIONS maps in alembic/env.py.
+        Index("idx_threads_conversation_status", "conversation_id", "status"),
     )
 
     # Relationships

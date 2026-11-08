@@ -137,6 +137,16 @@ class ProcessingJob(BaseModel):
     __table_args__ = (
         Index("idx_job_status_created", "status", "created_at"),
         Index("idx_job_type_org", "job_type", "organization_id"),
+        # f931599b6b5b_enhance_document_processing:
+        Index("ix_processing_jobs_progress_percentage", "progress_percentage"),
+        Index("ix_processing_jobs_queue_name", "queue_name"),
+        Index("ix_processing_jobs_worker_id", "worker_id"),
+        Index("idx_processing_jobs_queue_priority", "status", "priority", "created_at"),
+        Index("idx_processing_jobs_org_type", "organization_id", "job_type", "status"),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_processing_jobs_document_status", "document_id", "status"),
+        Index("idx_processing_jobs_org_status", "organization_id", "status"),
+        Index("idx_processing_jobs_org_created", "organization_id", "created_at"),
     )
 
     # Relationships
