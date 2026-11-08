@@ -206,14 +206,14 @@ async def test_create_thread_only_flushes_caller_owns_the_commit(
     assert row is None  # rolled back — never committed by create_thread itself
 
 
-async def test_delete_message_allows_author_even_as_viewer(
+async def test_delete_message_requires_edit_rights_even_for_author(
     db_session: AsyncSession,
     thread_factory: Callable[..., Awaitable[Thread]],
     user_factory: Callable[..., Awaitable[User]],
 ) -> None:
-    """Divergence 6: ChatService.delete_message allows the message's AUTHOR
-    to delete it even without edit rights; the standalone router endpoint
-    requires edit rights and never checks authorship."""
+    """Divergence 6 (closed 2026-11-08): ChatService.delete_message used to
+    let a message's AUTHOR delete it even as a read-only viewer. Both delete
+    paths now require edit rights; an editor may still delete their own."""
     from src.models import ChatMessage, MessageRole
     from src.models.conversation import Conversation
     from src.models.workspace import Workspace as WorkspaceModel
@@ -250,7 +250,20 @@ async def test_delete_message_allows_author_even_as_viewer(
     db_session.info["_created"]["chat_messages"].append(msg.id)
 
     service = ChatService(db_session)
-    # A plain viewer can't normally edit, but they authored this message.
+    # A viewer is read-only: authorship no longer lets them delete.
+    assert await service.delete_message(msg.id, author_viewer.id) is False
+
+    # Promoted to editor, the author may delete their own message.
+    member = (
+        await db_session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == conv.workspace_id,
+                WorkspaceMember.user_id == author_viewer.id,
+            )
+        )
+    ).scalar_one()
+    member.role = WorkspaceRole.EDITOR
+    await db_session.commit()
     assert await service.delete_message(msg.id, author_viewer.id) is True
 
 
