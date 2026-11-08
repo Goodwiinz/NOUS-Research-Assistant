@@ -1112,9 +1112,12 @@ jobs:
           exit_code=$?
           set -e
 
+          # Exit 5 = no tests collected. That used to be treated as a pass,
+          # which is how this job ran zero tests and still reported green;
+          # tests/resilience/ now exists, so an empty selection is a failure.
           if [ "$exit_code" = "5" ]; then
-            echo "No resilience tests found - skipping"
-            exit 0
+            echo "::error::No resilience tests collected (expected backend/tests/resilience/)"
+            exit 1
           fi
 
           exit "$exit_code"
