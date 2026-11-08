@@ -28,6 +28,7 @@ from src.core.resilience import (
     RetryConfig,
     RetryStrategy,
     TimeoutError,
+    calculate_delay,
     get_or_create_bulkhead,
     reset_all_bulkheads,
     retry,
@@ -189,23 +190,38 @@ class TestRetryPattern:
 
     @pytest.mark.asyncio
     async def test_retry_exponential_backoff(self) -> None:
-        """Verify exponential backoff timing."""
-        delays = []
+        """Exponential backoff doubles per attempt, caps at max_delay, and
+        jitter stays within +/-25%. Checked on calculate_delay directly: a
+        wall-clock comparison of jittered sleeps is flaky by construction."""
+        exact = RetryConfig(
+            base_delay=0.1,
+            max_delay=0.5,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=False,
+        )
+        assert [calculate_delay(n, exact) for n in range(4)] == pytest.approx(
+            [0.1, 0.2, 0.4, 0.5]
+        )
 
-        @retry(max_attempts=4, base_delay=0.1, strategy=RetryStrategy.EXPONENTIAL)
+        jittered = RetryConfig(
+            base_delay=0.1, strategy=RetryStrategy.EXPONENTIAL, jitter=True
+        )
+        for n in range(4):
+            base = 0.1 * (2**n)
+            for _ in range(50):
+                assert base * 0.75 <= calculate_delay(n, jittered) <= base * 1.25
+
+        # End to end: the decorator really retries max_attempts times.
+        calls = []
+
+        @retry(max_attempts=4, base_delay=0.001, strategy=RetryStrategy.EXPONENTIAL)
         async def operation() -> None:
-            delays.append(datetime.utcnow())
+            calls.append(1)
             raise ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             await operation()
-
-        # Check delay progression (approximately exponential)
-        if len(delays) >= 3:
-            delay1 = (delays[1] - delays[0]).total_seconds()
-            delay2 = (delays[2] - delays[1]).total_seconds()
-            # Second delay should be roughly 2x first (with jitter)
-            assert delay2 > delay1 * 1.5  # Allow for jitter
+        assert len(calls) == 4
 
     @pytest.mark.asyncio
     async def test_retry_callback_invoked(self, failing_service: Any) -> None:
@@ -544,19 +560,26 @@ class TestResilienceUnderLoad:
         results = {"success": 0, "rejected": 0}
 
         async def operation() -> None:
+            # Generous queue timeout: admitted work drains in well under a
+            # second, so only a very slow runner could time out -- and a
+            # queue timeout is a rejection too, not a test error.
             try:
-                async with bulkhead.acquire(timeout=0.5):
+                async with bulkhead.acquire(timeout=10.0):
                     await asyncio.sleep(0.1)
                     results["success"] += 1
-            except BulkheadFullError:
+            except (BulkheadFullError, asyncio.TimeoutError):
                 results["rejected"] += 1
 
         # Simulate burst
         burst_size = 50
         await asyncio.gather(*[operation() for _ in range(burst_size)])
 
-        # Some should succeed, some should be rejected
-        assert results["success"] > 0
+        # Admission is capped at max_concurrent + max_queue; the rest of the
+        # burst is rejected (this failed before the Bulkhead reservation fix,
+        # when nothing was ever rejected and excess callers just waited).
+        cap = ResilienceTestConfig.BH_MAX_CONCURRENT + ResilienceTestConfig.BH_MAX_QUEUE
+        assert 0 < results["success"] <= cap
+        assert results["rejected"] >= burst_size - cap
         assert results["success"] + results["rejected"] == burst_size
 
     @pytest.mark.asyncio
