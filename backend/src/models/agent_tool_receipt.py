@@ -12,7 +12,7 @@ table is deliberately tiny and write-once: no updates, no soft delete, no
 relationships.
 """
 
-from sqlalchemy import JSON, CheckConstraint, Column, DateTime, String, func
+from sqlalchemy import JSON, CheckConstraint, Column, DateTime, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 
 from .base import GUID, Base
@@ -49,6 +49,8 @@ class AgentToolOperation(Base):
             "state IN ('claimed', 'dispatched', 'completed', 'unknown')",
             name="ck_agent_tool_operations_state",
         ),
+        # Created by agent_ops_20260925 (20260925_agent_tool_operation_results).
+        Index("ix_agent_tool_operations_thread_turn", "thread_id", "turn_id"),
     )
 
     operation_id = Column(String(64), primary_key=True)

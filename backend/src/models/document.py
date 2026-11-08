@@ -16,12 +16,20 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import joinedload, relationship, selectinload
 
 from .base import GUID, BaseModel
 from .utils import StringArray
+
+# Live-row predicates of the org-scoped dedup indexes; keep them identical to
+# the migrations that create them (uq_documents_org_checksum and
+# i9j0k1l2m3n4). The upload path's dedup catches a violation of
+# uq_documents_org_checksum_live by name (services/documents/file_service.py).
+LIVE_CHECKSUM = "is_deleted = false AND checksum_sha256 IS NOT NULL"
+LIVE_ARXIV_ID = "is_deleted = false AND arxiv_id IS NOT NULL"
 
 
 class DocumentType(PyEnum):
@@ -169,6 +177,63 @@ class Document(BaseModel):
         Index("idx_document_org_public", "organization_id", "is_public"),
         # Backs the default GET /documents list: WHERE org ORDER BY created_at DESC
         Index("idx_document_org_created", "organization_id", "created_at"),
+        # Org-scoped partial unique indexes: one live row per content hash
+        # (uq_documents_org_checksum) and per exact arXiv revision
+        # (i9j0k1l2m3n4_add_documents_arxiv_id). Soft-deleted rows are exempt.
+        Index(
+            "uq_documents_org_checksum_live",
+            "organization_id",
+            "checksum_sha256",
+            unique=True,
+            postgresql_where=text(LIVE_CHECKSUM),
+            sqlite_where=text(LIVE_CHECKSUM),
+        ),
+        Index(
+            "uq_documents_org_arxiv_id_live",
+            "organization_id",
+            "arxiv_id",
+            unique=True,
+            postgresql_where=text(LIVE_ARXIV_ID),
+            sqlite_where=text(LIVE_ARXIV_ID),
+        ),
+        # f931599b6b5b_enhance_document_processing:
+        Index("ix_documents_is_embedded", "is_embedded"),
+        Index("ix_documents_is_indexed", "is_indexed"),
+        Index("ix_documents_is_public", "is_public"),
+        Index("ix_documents_uploaded_by_user_id", "uploaded_by_user_id"),
+        Index(
+            "idx_documents_org_status_processing",
+            "organization_id",
+            "processing_status",
+            "document_type",
+        ),
+        Index(
+            "idx_documents_processing_queue",
+            "processing_status",
+            "created_at",
+            "organization_id",
+        ),
+        Index(
+            "idx_documents_searchable",
+            "is_embedded",
+            "is_indexed",
+            "is_deleted",
+            "organization_id",
+        ),
+        # p3q4r5s6t7u8_add_dashboard_performance_indexes:
+        Index(
+            "idx_documents_org_deleted_created",
+            "organization_id",
+            "is_deleted",
+            "created_at",
+        ),
+        Index("idx_documents_org_title", "organization_id", "title"),
+        Index(
+            "idx_documents_search_gin",
+            "search_vector",
+            postgresql_using="gin",
+            postgresql_where=text("search_vector IS NOT NULL"),
+        ),
     )
 
     def __repr__(self):

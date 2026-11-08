@@ -7,6 +7,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -31,6 +32,11 @@ class Collection(BaseModel):
     """
 
     __tablename__ = "collections"
+    __table_args__ = (
+        # Created by n9p2q3r4s5t6_add_missing_performance_indexes.
+        Index("idx_collections_workspace_created", "workspace_id", "created_at"),
+        Index("idx_collections_workspace_status", "workspace_id", "research_status"),
+    )
 
     # Parent relationship
     workspace_id = Column(

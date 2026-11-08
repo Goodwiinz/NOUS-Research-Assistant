@@ -10,7 +10,16 @@ model; api_key_auth re-exports them for backwards compatibility.
 import secrets
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 
 from .base import Base
 
@@ -37,6 +46,17 @@ class APIKey(Base):
     expires_at = Column(DateTime, nullable=True)  # Optional expiration
     organization_id = Column(String, nullable=True)  # Organization the key is scoped to
 
+    # Created by add_api_keys_table (organization: add_org_id_api_keys).
+    # idx_api_keys_hash duplicates the unique constraint on key_hash.
+    __table_args__ = (
+        Index("idx_api_keys_hash", "key_hash"),
+        Index("idx_api_keys_active", "is_active"),
+        Index("idx_api_keys_prefix", "key_prefix"),
+        Index("idx_api_keys_created_at", "created_at"),
+        Index("idx_api_keys_last_used", "last_used_at"),
+        Index("idx_api_keys_organization", "organization_id"),
+    )
+
 
 class APIKeyUsageLog(Base):
     """API Key usage log model for audit trail"""
@@ -61,3 +81,11 @@ class APIKeyUsageLog(Base):
     accessed_at = Column(
         DateTime, default=datetime.utcnow, nullable=False
     )  # When the API was accessed
+
+    # Created by add_api_keys_table.
+    __table_args__ = (
+        Index("idx_api_usage_key_id", "api_key_id"),
+        Index("idx_api_usage_accessed_at", "accessed_at"),
+        Index("idx_api_usage_endpoint", "endpoint"),
+        Index("idx_api_usage_client_ip", "client_ip"),
+    )

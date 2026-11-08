@@ -9,7 +9,15 @@ associated with which projects.
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from .base import GUID, BaseModel
@@ -37,6 +45,11 @@ class ProjectThread(BaseModel):
     __tablename__ = "project_threads"
     __table_args__ = (
         UniqueConstraint("project_id", "thread_id", name="uq_project_thread"),
+        # Created by i4k8l9m0n1o2_add_project_thread_integration (alongside the
+        # ix_ indexes the columns' index=True declares).
+        Index("idx_project_threads_project_id", "project_id"),
+        Index("idx_project_threads_thread_id", "thread_id"),
+        Index("idx_project_threads_linked_by", "linked_by_id"),
     )
 
     # Foreign keys

@@ -4,7 +4,7 @@ ResearchStep model for individual steps within a research run.
 
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -33,6 +33,14 @@ class ResearchStep(BaseModel):
     """A single step executed within a research run."""
 
     __tablename__ = "research_steps"
+    __table_args__ = (
+        # r6_run_integrity_uniques: one step per (run, index), so concurrent
+        # streams cannot double-insert a step.
+        Index("uq_research_steps_run_idx", "run_id", "step_index", unique=True),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_research_steps_run", "run_id"),
+        Index("idx_research_steps_run_index", "run_id", "step_index"),
+    )
 
     run_id = Column(GUID(), ForeignKey("research_runs.id"), nullable=False)
     step_index = Column(Integer, nullable=False)

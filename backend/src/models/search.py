@@ -15,6 +15,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -39,6 +40,19 @@ class SearchQuery(BaseModel):
     """Search query model for tracking user queries"""
 
     __tablename__ = "search_queries"
+    __table_args__ = (
+        # Created by p3q4r5s6t7u8_add_dashboard_performance_indexes.
+        Index("idx_search_queries_org_created", "organization_id", "created_at"),
+        Index(
+            "idx_search_queries_org_created_duration",
+            "organization_id",
+            "created_at",
+            "search_duration_ms",
+        ),
+        Index(
+            "idx_search_queries_created_duration", "created_at", "search_duration_ms"
+        ),
+    )
 
     # Query information
     query_text = Column(Text, nullable=False)

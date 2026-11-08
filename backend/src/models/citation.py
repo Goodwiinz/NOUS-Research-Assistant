@@ -2,7 +2,17 @@
 Citation model for Terminal Observatory RAG references
 """
 
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -23,6 +33,25 @@ class Citation(BaseModel):
     """
 
     __tablename__ = "citations"
+    __table_args__ = (
+        # The non-unique partial lookups o2r3s4t5u6v7 (re)creates after
+        # dropping the old global-unique ones (first added by d9f3g4h5i6j7).
+        # idx_citations_snippet_gin (a to_tsvector expression index from
+        # b2c3d4e5f6g7 / sv01_search_vector_repair) stays migration-owned;
+        # see MIGRATION_OWNED_INDEX_REVISIONS in alembic/env.py.
+        Index(
+            "ix_citations_doi",
+            "doi",
+            postgresql_where=text("doi IS NOT NULL"),
+            sqlite_where=text("doi IS NOT NULL"),
+        ),
+        Index(
+            "ix_citations_arxiv_id",
+            "arxiv_id",
+            postgresql_where=text("arxiv_id IS NOT NULL"),
+            sqlite_where=text("arxiv_id IS NOT NULL"),
+        ),
+    )
 
     # Parent relationships
     # message_id is nullable to support standalone citations (e.g., bibliography entries)
