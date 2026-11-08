@@ -210,7 +210,8 @@ backend:
     - name: MALLOC_ARENA_MAX
       value: "2"
     - name: CORS_ORIGINS
-      value: "https://dev-app.goodwiinz.tech,http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
+      # dev-app.goodwiinz.tech was retired (NXDOMAIN); the frontend is goodwiinz.tech.
+      value: "http://localhost:3000,http://127.0.0.1:3000,https://goodwiinz.tech,https://www.goodwiinz.tech"
     - name: FRONTEND_BASE_URL
       value: "https://goodwiinz.tech"
     - name: DB_ASYNC_POOL_SIZE
