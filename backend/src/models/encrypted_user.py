@@ -19,6 +19,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -85,7 +86,7 @@ class EncryptedUserProfile(Base):
     employee_id = Column(EncryptedString)
 
     # Metadata
-    created_at = Column(DateTime(timezone=True), server_default="now()")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate="now()")
     last_encryption_rotation = Column(DateTime(timezone=True))
 
@@ -262,7 +263,7 @@ class EncryptedOrganizationProfile(Base):
     custom_attributes = Column(EncryptedJSON)
 
     # Metadata
-    created_at = Column(DateTime(timezone=True), server_default="now()")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate="now()")
     last_encryption_rotation = Column(DateTime(timezone=True))
 
@@ -381,7 +382,7 @@ class EncryptionAuditLog(Base):
     user_agent = Column(Text)
     success = Column(Boolean, default=True)
     error_message = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default="now()")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     user = relationship("User")

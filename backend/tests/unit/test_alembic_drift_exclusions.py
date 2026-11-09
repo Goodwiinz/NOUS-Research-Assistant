@@ -2,8 +2,7 @@
 
 The CI drift check (``alembic check`` against a from-empty database) is
 blocking. Everything the migrations build must be declared on the models,
-except the objects ``env.py`` lists as migration-owned and the four
-``server_default="now()"`` columns it compares by declaration. An entry that
+except the objects ``env.py`` lists as migration-owned. An entry that
 names a mapped object, or a revision that does not exist, would hide real
 drift, so these tests pin each entry to the facts it claims.
 
@@ -146,13 +145,20 @@ def test_migration_owned_indexes_are_not_declared() -> None:
         )
 
 
-def test_frozen_now_defaults_still_declare_the_string() -> None:
-    """Once a column moves to ``func.now()`` its exemption must go too."""
-    metadata = _metadata()
-    columns = _env_literal("FROZEN_NOW_DEFAULT_COLUMNS")
-    assert len(columns) == 4
-    for table, column in columns:
-        assert metadata[table]["columns"][column] == "now()", (
-            f"{table}.{column} no longer declares server_default='now()'; "
-            "remove it from FROZEN_NOW_DEFAULT_COLUMNS"
-        )
+def test_no_model_declares_a_frozen_timestamp_default() -> None:
+    """A *string* server_default like "now()" renders DEFAULT 'now()', a quoted
+    literal PostgreSQL folds into the table's creation time, so every row gets
+    the same timestamp (cd01_created_at_default_now fixed six such columns,
+    including encryption_audit_logs.created_at). Use func.now() / text("now()")."""
+    frozen = re.compile(r"^\s*(now\(\)|now|current_timestamp|today)\s*$", re.I)
+    offenders = [
+        f"{table}.{column}"
+        for table, info in _metadata().items()
+        for column, default in info["columns"].items()
+        if isinstance(default, str) and frozen.match(default)
+    ]
+    assert (
+        not offenders
+    ), "string server_default that PostgreSQL freezes at CREATE TABLE: " + ", ".join(
+        sorted(offenders)
+    )
