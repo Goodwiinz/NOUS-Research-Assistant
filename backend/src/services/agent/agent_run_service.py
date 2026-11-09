@@ -59,6 +59,15 @@ class ActiveRunConflict(RuntimeError):
     """A non-terminal run already owns the thread's single-writer slot."""
 
 
+class HandoffInProgress(ActiveRunConflict):
+    """The thread's turn is paused on a child Codex run (machine handoff)."""
+
+    client_message = "Codex is still working: cancel it or wait."
+
+    def __init__(self) -> None:
+        super().__init__(self.client_message)
+
+
 class RunStatusProjectionRejected(RuntimeError):
     """The durable row rejected a requested job-status projection."""
 
@@ -182,6 +191,15 @@ def _coerce_status(value: Any) -> Optional[JobStatus]:
     except ValueError:
         logger.warning("agent_runs: dropping unknown job status %r", value)
         return None
+
+
+def top_level_run() -> Any:
+    """Predicate for runs that own a thread's turn (not handoff children).
+
+    A child Codex run shares its parent's thread; thread-scoped active/latest
+    lookups must never see it, or ``scalar_one_or_none`` finds two rows.
+    """
+    return AgentRun.parent_run_id.is_(None)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +337,7 @@ async def upsert_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_uuid,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -509,6 +528,7 @@ async def _transition_existing_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_id,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -741,6 +761,7 @@ async def get_active_run_for_thread(
         return None
     stmt = select(AgentRun).where(
         AgentRun.thread_id == thread_uuid,
+        top_level_run(),
         AgentRun.organization_id == _coerce_uuid(organization_id),
         AgentRun.user_id == _coerce_uuid(user_id),
         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
@@ -773,6 +794,7 @@ async def get_latest_run_for_thread(
         select(AgentRun)
         .where(
             AgentRun.thread_id == thread_uuid,
+            top_level_run(),
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
         )
@@ -1007,9 +1029,16 @@ async def list_stale_runs(
     The sweeper (next PR) lists candidates here, then ``claim_lease``s each —
     the atomic per-row claim makes the list-then-claim pattern race-safe.
     System API — cross-tenant by design.
+
+    ``delegated`` handoff parents are never candidates: they wait on their
+    child Codex run with no time limit (Stop cancels the child; the resume
+    drain moves them on), and listing them would let long-waiting parents
+    fill the oldest-first batch and starve the sweeper of real stale runs.
     """
     now = now or _utcnow()
-    non_terminal = [s.value for s in JobStatus if not s.is_terminal]
+    non_terminal = [
+        s.value for s in JobStatus if not s.is_terminal and s is not JobStatus.DELEGATED
+    ]
     stmt = (
         select(AgentRun)
         .where(
