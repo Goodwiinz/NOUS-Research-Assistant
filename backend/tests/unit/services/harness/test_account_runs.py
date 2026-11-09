@@ -26,10 +26,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.agent.harness_streaming import (
-    context_for_accepted_run,
-    create_chat_context,
-)
+from src.api.agent.harness_streaming import context_for_accepted_run
 from src.core.config import settings
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
@@ -54,6 +51,7 @@ from src.services.harness.account import (
     project_in_account,
     run_project,
 )
+from src.services.harness.chat_context import create_chat_context
 from src.services.integrations.context import (
     DeviceNotConnectedToProject,
     IntegrationAccessDenied,
@@ -437,7 +435,7 @@ async def test_an_account_folder_serves_chats_in_every_project_of_the_account(
 
 # End to end, two layers refuse this: _run_consent_kind and the mint's own
 # account check (_consent_admits, MA2). Mutation MA1 (delete `or not await
-# project_in_account(...)` in harness_streaming._run_consent_kind) is therefore
+# project_in_account(...)` in chat_context._run_consent_kind) is therefore
 # caught by test_the_run_consent_kind_is_decided_before_any_grant_is_minted,
 # which calls the first layer directly, not by this one.
 async def test_an_account_folder_refuses_a_project_outside_the_account(
@@ -537,7 +535,7 @@ async def test_the_run_consent_kind_is_decided_before_any_grant_is_minted(
 ) -> None:
     """The folder check refuses on its own: the mint's own account check is a
     second layer, so exercise the first one directly."""
-    from src.api.agent.harness_streaming import _run_consent_kind
+    from src.services.harness.chat_context import _run_consent_kind
 
     async def kind(thread_id: UUID, device: UUID, folder: UUID) -> str:
         decided: str = await _run_consent_kind(
@@ -570,7 +568,7 @@ async def test_the_run_consent_kind_is_decided_before_any_grant_is_minted(
 
 
 # Mutation MA1c: return "project" for every folder tied to a project in
-# harness_streaming._run_consent_kind (the pre-review behaviour); this test and
+# chat_context._run_consent_kind (the pre-review behaviour); this test and
 # test_a_project_folder_runs_under_the_account_approval_alone must fail.
 async def test_a_project_folder_on_a_device_with_both_approvals_runs_under_the_account_one(
     db: AsyncSession, account: IntegrationContext
@@ -1467,3 +1465,30 @@ async def test_an_account_caller_that_names_no_project_is_a_plain_denial(
             thread_id=THREAD_B,
             project_id=PROJECT_B,
         )
+
+
+async def test_account_pairing_child_uses_account_folder(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """A handoff child may run in an account folder (no project of its own):
+    its run grant is minted from the account approval for the chat's project."""
+    from src.services.harness.handoff import create_handoff_run
+    from tests.unit.services.harness.handoff_helpers import parent_run
+
+    parent = await parent_run(db)
+    child_id = await create_handoff_run(
+        db,
+        parent_run_id=parent,
+        current_user=OWNER,
+        tool_call_id="call-1",
+        brief="Run the tests and fix the failures.",
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=FOLDER_A,
+    )
+    run, session = await _run_and_session(db, child_id)
+    assert run.parent_run_id == parent and run.project_id == PROJECT
+    assert session.workspace_id == FOLDER_A and session.workspace_locked
+    grant = await db.get(IntegrationGrant, session.grant_id)
+    assert grant is not None and grant.project_id == PROJECT
+    assert grant.binding_kind == "project" and grant.request_id == account.consent_id
+    assert grant.thread_id == THREAD and grant.device_id == ACCOUNT_DEVICE

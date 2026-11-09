@@ -13,7 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import HARNESS_EXECUTE_KIND, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
@@ -43,6 +43,8 @@ TERMINAL = {
     "failed": JobStatus.FAILED,
     "interrupted": JobStatus.CANCELLED,
 }
+# A handoff child's reply, stored on the run for its parent's graph.
+HANDOFF_REPLY_CHARS = 4000
 
 
 def now() -> datetime:
@@ -186,7 +188,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
             await db.scalars(
                 select(AgentOutbox.run_id)
                 .where(
-                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
                     AgentOutbox.status == "pending",
                 )
                 .order_by(AgentOutbox.run_id, AgentOutbox.created_at)
@@ -210,7 +212,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 select(AgentOutbox)
                 .where(
                     AgentOutbox.run_id == run_id,
-                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
                     AgentOutbox.status == "pending",
                 )
                 .with_for_update(skip_locked=True)
@@ -367,7 +369,10 @@ async def lease_commands(
             # this command below: run, then accepted outbox, then commands.
             await db.scalars(
                 select(AgentOutbox)
-                .where(AgentOutbox.run_id == run.job_id)
+                .where(
+                    AgentOutbox.run_id == run.job_id,
+                    AgentOutbox.kind == HARNESS_EXECUTE_KIND,
+                )
                 .with_for_update()
             )
             commands = (
@@ -593,23 +598,28 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
                 "completed": "External execution completed without output.",
             }[state]
         )
-        assistant_id = await _persist_assistant_message_safe(
-            thread_id=thread,
-            content=text,
-            model_name="codex",
-            tool_executions_out=None,
-            stopped=state == "interrupted",
-            required=True,
-            client_message_id=run_id,
-        )
-        if not assistant_id:
-            raise RuntimeError("assistant projection required")
+        # A handoff child's reply goes to its parent's graph, never the
+        # transcript: the parent writes the turn's one assistant row.
+        child = run.parent_run_id is not None
+        assistant_id = None
+        if not child:
+            assistant_id = await _persist_assistant_message_safe(
+                thread_id=thread,
+                content=text,
+                model_name="codex",
+                tool_executions_out=None,
+                stopped=state == "interrupted",
+                required=True,
+                client_message_id=run_id,
+            )
+            if not assistant_id:
+                raise RuntimeError("assistant projection required")
         run, session = await _locked(db, run_id)
         if not JobStatus(run.status).is_terminal:
             payload: dict[str, Any] = (
                 {"code": "harness_failed", "message": "External execution failed."}
                 if state == "failed"
-                else {"assistant_message_id": assistant_id}
+                else ({} if child else {"assistant_message_id": assistant_id})
             )
             await finalize_submission(
                 db,
@@ -622,6 +632,16 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
                     "interrupted": RunEventType.RUN_CANCELLED,
                 }[state],
                 payload=payload,
+                # Merged under the run lock: finalize replaces run_metadata,
+                # and handoff_brief / harness_prompt must survive.
+                run_metadata=(
+                    {
+                        **(run.run_metadata or {}),
+                        "handoff_reply": text[:HANDOFF_REPLY_CHARS],
+                    }
+                    if child
+                    else None
+                ),
                 provider="codex",
             )
     run, _ = await _locked(db, run_id)

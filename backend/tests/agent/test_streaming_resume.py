@@ -1132,6 +1132,118 @@ def test_named_stream_still_replays_a_just_finished_codex_run(
     assert cursors == [7]
 
 
+# ---------------------------------------------------------------------------
+# Machine handoff: a child Codex run shares its parent's thread, but the thread
+# belongs to the parent. A stream-less resume must never attach to the child's
+# ledger. The lookups run real SQL (SQLite) so the ``top_level_run()`` filter
+# is what is under test. Mutations (agent_run_service): drop ``top_level_run()``
+# from get_active_run_for_thread and this test fails with MultipleResultsFound
+# (parent and child are both active); drop it from get_latest_run_for_thread
+# and it fails with "a handoff child was replayed" (the newer running child is
+# returned as latest and handed to the ledger stream).
+# ---------------------------------------------------------------------------
+
+
+def test_resume_without_stream_id_does_not_replay_a_handoff_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from datetime import datetime, timedelta, timezone
+    from uuid import UUID
+
+    from sqlalchemy import create_engine, insert
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from src.api.agent import harness_streaming
+    from src.models.agent_run import AgentRun
+    from src.services.agent import agent_run_service
+
+    org, user = uuid4(), uuid4()
+    started = datetime(2026, 10, 28, tzinfo=timezone.utc)
+    parent_id, child_id = str(uuid4()), str(uuid4())
+    path = tmp_path / "runs.db"
+    seed = create_engine(f"sqlite:///{path}")
+    AgentRun.__table__.create(seed)
+    with seed.begin() as conn:
+        conn.execute(
+            insert(AgentRun).values(
+                job_id=parent_id,
+                thread_id=UUID(THREAD_ID),
+                organization_id=org,
+                user_id=user,
+                status="delegated",
+                execution_provider="nous",
+                created_at=started,
+                updated_at=started,
+            )
+        )
+        # Newer on both orderings, so an unfiltered "latest" lookup would
+        # return the child rather than the parent.
+        later = started + timedelta(minutes=1)
+        conn.execute(
+            insert(AgentRun).values(
+                job_id=child_id,
+                thread_id=UUID(THREAD_ID),
+                organization_id=org,
+                user_id=user,
+                status="running",
+                execution_provider="codex",
+                parent_run_id=parent_id,
+                created_at=later,
+                updated_at=later,
+            )
+        )
+    seed.dispose()
+
+    looked_up: list[str] = []
+
+    def real_lookup(fn):  # type: ignore[no-untyped-def]
+        # The route's request session is a mock; run the real query against
+        # the seeded rows, scoped to the seeded owner.
+        async def lookup(_db, thread_uuid, **_owner):  # type: ignore[no-untyped-def]
+            engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+            try:
+                async with async_sessionmaker(engine)() as session:
+                    run = await fn(
+                        session, thread_uuid, organization_id=org, user_id=user
+                    )
+            finally:
+                await engine.dispose()
+            looked_up.append(run.job_id if run is not None else "none")
+            return run
+
+        return lookup
+
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod,
+        "get_active_run_for_thread",
+        real_lookup(agent_run_service.get_active_run_for_thread),
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "get_latest_run_for_thread",
+        real_lookup(agent_run_service.get_latest_run_for_thread),
+    )
+    monkeypatch.setattr(
+        harness_streaming,
+        "context_for_accepted_run",
+        AsyncMock(side_effect=AssertionError("a handoff child was replayed")),
+    )
+    monkeypatch.setattr(
+        harness_streaming,
+        "stream_harness_run",
+        Mock(side_effect=AssertionError("a handoff child was replayed")),
+    )
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    # 204 until Task 3.9 gives the delegated parent its handoff_started frame.
+    assert resp.status_code == 204
+    # The active lookup found the parent, which is not a Codex run, so the
+    # route fell through to the native-stream path without touching the child.
+    assert looked_up == [parent_id, parent_id]
+
+
 def test_envelope_carries_stream_id_only_when_present():
     """stream_id is additive: present when the emitter has a buffer id,
     absent (not null) otherwise — pre-change frame shape preserved."""

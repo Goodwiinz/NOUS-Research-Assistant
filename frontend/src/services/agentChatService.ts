@@ -674,6 +674,7 @@ export type AgentJobStatus =
   | 'running'
   | 'awaiting_confirmation'
   | 'stopping'
+  | 'delegated'
   | 'completed'
   | 'failed'
   | 'error'
@@ -698,6 +699,7 @@ export function isTerminalJobStatus(status: AgentJobStatus): boolean {
     case 'running':
     case 'awaiting_confirmation':
     case 'stopping':
+    case 'delegated':
       return false;
     default: {
       // Compile-time exhaustiveness; at runtime an unknown status (from a

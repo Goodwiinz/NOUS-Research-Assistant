@@ -36,7 +36,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import DISPATCH_KINDS, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
@@ -57,6 +57,15 @@ _PRE_STOP_RUN_STATUSES = tuple(
 
 class ActiveRunConflict(RuntimeError):
     """A non-terminal run already owns the thread's single-writer slot."""
+
+
+class HandoffInProgress(ActiveRunConflict):
+    """The thread's turn is paused on a child Codex run (machine handoff)."""
+
+    client_message = "Codex is still working: cancel it or wait."
+
+    def __init__(self) -> None:
+        super().__init__(self.client_message)
 
 
 class RunStatusProjectionRejected(RuntimeError):
@@ -123,8 +132,12 @@ def _integrity_error_chain(exc: IntegrityError) -> list[Any]:
     return chain
 
 
-def _integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
-    """Read a driver-reported constraint name without parsing user text."""
+def integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
+    """Read a driver-reported constraint name without parsing user text.
+
+    Walks the bounded cause chain, so asyncpg's ``UniqueViolationError``
+    behind SQLAlchemy's adapted ``.orig`` is found too. SQLite reports none.
+    """
     for original in _integrity_error_chain(exc):
         constraint = getattr(original, "constraint_name", None)
         if constraint:
@@ -134,6 +147,10 @@ def _integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
         if constraint:
             return str(constraint)
     return None
+
+
+# Compatibility name for existing in-module callers.
+_integrity_constraint_name = integrity_constraint_name
 
 
 def _is_active_thread_conflict(exc: IntegrityError) -> bool:
@@ -182,6 +199,15 @@ def _coerce_status(value: Any) -> Optional[JobStatus]:
     except ValueError:
         logger.warning("agent_runs: dropping unknown job status %r", value)
         return None
+
+
+def top_level_run() -> Any:
+    """Predicate for runs that own a thread's turn (not handoff children).
+
+    A child Codex run shares its parent's thread; thread-scoped active/latest
+    lookups must never see it, or ``scalar_one_or_none`` finds two rows.
+    """
+    return AgentRun.parent_run_id.is_(None)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +345,7 @@ async def upsert_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_uuid,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -509,6 +536,7 @@ async def _transition_existing_run(
                 await db.execute(
                     select(AgentRun).where(
                         AgentRun.thread_id == thread_id,
+                        top_level_run(),
                         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                     )
                 )
@@ -638,6 +666,7 @@ async def terminalize_stale_run(
                 update(AgentOutbox)
                 .where(
                     AgentOutbox.run_id == job_id,
+                    AgentOutbox.kind.in_(DISPATCH_KINDS),
                     AgentOutbox.status == AgentOutboxStatus.PENDING.value,
                 )
                 .values(
@@ -741,6 +770,7 @@ async def get_active_run_for_thread(
         return None
     stmt = select(AgentRun).where(
         AgentRun.thread_id == thread_uuid,
+        top_level_run(),
         AgentRun.organization_id == _coerce_uuid(organization_id),
         AgentRun.user_id == _coerce_uuid(user_id),
         AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
@@ -773,6 +803,7 @@ async def get_latest_run_for_thread(
         select(AgentRun)
         .where(
             AgentRun.thread_id == thread_uuid,
+            top_level_run(),
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
         )
@@ -1007,9 +1038,16 @@ async def list_stale_runs(
     The sweeper (next PR) lists candidates here, then ``claim_lease``s each —
     the atomic per-row claim makes the list-then-claim pattern race-safe.
     System API — cross-tenant by design.
+
+    ``delegated`` handoff parents are never candidates: they wait on their
+    child Codex run with no time limit (Stop cancels the child; the resume
+    drain moves them on), and listing them would let long-waiting parents
+    fill the oldest-first batch and starve the sweeper of real stale runs.
     """
     now = now or _utcnow()
-    non_terminal = [s.value for s in JobStatus if not s.is_terminal]
+    non_terminal = [
+        s.value for s in JobStatus if not s.is_terminal and s is not JobStatus.DELEGATED
+    ]
     stmt = (
         select(AgentRun)
         .where(

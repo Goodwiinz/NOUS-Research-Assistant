@@ -49,6 +49,7 @@ from src.services.agent.agent_execution_service import (
 )
 from src.services.agent.agent_run_service import (
     ActiveRunConflict,
+    HandoffInProgress,
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
     get_run,
@@ -325,6 +326,8 @@ def _stream_failure_message(exc: BaseException) -> BaseException | str:
 
     if isinstance(exc, BranchAccessError):
         return str(exc)
+    if isinstance(exc, HandoffInProgress):
+        return HandoffInProgress.client_message
     if isinstance(exc, ActiveRunConflict):
         return "A response is already in progress for this thread."
     if isinstance(exc, AgentThreadResolutionError):

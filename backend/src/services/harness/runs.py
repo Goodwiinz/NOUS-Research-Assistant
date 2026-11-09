@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.agent_outbox import AgentOutbox
+from src.models.agent_outbox import HARNESS_EXECUTE_KIND, AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import WorkspaceBinding
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
@@ -154,6 +154,26 @@ async def bind_external_submission(
         or run.execution_provider != "nous"
     ):
         raise IntegrationAccessDenied()
+    run.execution_provider = "codex"
+    run.project_id = context.project_id
+    await reserve_workspace(
+        db, run=run, context=context, device_id=device_id, workspace_id=workspace_id
+    )
+
+
+async def reserve_workspace(
+    db: AsyncSession,
+    *,
+    run: Any,
+    context: IntegrationContext,
+    device_id: UUID,
+    workspace_id: UUID,
+) -> None:
+    """Recheck authority and lock one local folder for a Codex run; never commit.
+
+    Shared by chat acceptance and machine handoff. ``uq_harness_active_workspace``
+    is the last word on a concurrent writer; this pre-check names it.
+    """
     await authorize_external_submission(
         db,
         context=context,
@@ -170,11 +190,9 @@ async def bind_external_submission(
     )
     if existing is not None:
         raise ActiveRunConflict("A response already owns this local workspace.")
-    run.execution_provider = "codex"
-    run.project_id = context.project_id
     db.add(
         HarnessSession(
-            run_id=str(run_id),
+            run_id=str(run.job_id),
             grant_id=context.grant_id,
             device_id=device_id,
             workspace_id=workspace_id,
@@ -208,7 +226,12 @@ async def cancel_undelivered_start(db: AsyncSession, *, run_id: str) -> bool:
         return False
     outboxes = (
         await db.scalars(
-            select(AgentOutbox).where(AgentOutbox.run_id == run_id).with_for_update()
+            select(AgentOutbox)
+            .where(
+                AgentOutbox.run_id == run_id,
+                AgentOutbox.kind == HARNESS_EXECUTE_KIND,
+            )
+            .with_for_update()
         )
     ).all()
     commands = (

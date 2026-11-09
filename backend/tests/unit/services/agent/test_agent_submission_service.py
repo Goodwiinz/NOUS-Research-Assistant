@@ -8,7 +8,7 @@ producing a second one.
 
 Everything runs against SQLite, which carries the same partial unique indexes
 the accept path depends on (``uq_agent_runs_user_idempotency_key``,
-``uq_agent_runs_active_thread``, ``uq_agent_outbox_run``) because the models
+``uq_agent_runs_active_thread``, ``uq_agent_outbox_run_kind``) because the models
 declare ``sqlite_where`` alongside ``postgresql_where``. True cross-connection
 contention needs PostgreSQL; the race is therefore driven deterministically by
 suppressing the pre-insert lookup, which is exactly the state a losing racer
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -185,6 +186,104 @@ async def test_idempotent_retry_returns_existing_run(db: AsyncSession) -> None:
     assert await _count(db, AgentRun) == 1
     assert await _count(db, ChatMessage) == 1
     assert await _count(db, AgentOutbox) == 1
+
+
+# ---------------------------------------------------------------------------
+# A run can hold a second outbox row (a finished handoff child's
+# ``handoff.resume``); reads of "the run's dispatch record" filter on kind.
+# ---------------------------------------------------------------------------
+
+
+_AT = datetime(2026, 10, 29, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("dispatch_kind", ["agent.stream.execute", "harness.execute"])
+async def test_existing_outbox_id_ignores_the_resume_row(
+    db: AsyncSession, dispatch_kind: str
+) -> None:
+    """Mutation: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
+    ``_existing_outbox_id`` and this fails (the resume row's id returned as
+    the dispatch record)."""
+    run_id = str(uuid.uuid4())
+    db.add(AgentRun(job_id=run_id, status=JobStatus.COMPLETED.value))
+    await db.flush()
+    # The resume row is the older one, so an unfiltered read returns it.
+    resume = AgentOutbox(
+        run_id=run_id, kind=submission_mod.HANDOFF_RESUME_KIND, created_at=_AT
+    )
+    dispatch = AgentOutbox(
+        run_id=run_id, kind=dispatch_kind, created_at=_AT + timedelta(seconds=1)
+    )
+    db.add_all([resume, dispatch])
+    await db.commit()
+
+    assert await submission_mod._existing_outbox_id(db, run_id) == str(dispatch.id)
+
+
+async def test_existing_outbox_id_is_the_first_dispatch_row_written(
+    db: AsyncSession,
+) -> None:
+    """Not a state the code writes today, but the answer must not depend on
+    scan order. Mutation: drop the ``order_by`` from ``_existing_outbox_id``
+    and this fails (the later row, which sorts first by kind, is returned)."""
+    run_id = str(uuid.uuid4())
+    db.add(AgentRun(job_id=run_id, status=JobStatus.COMPLETED.value))
+    await db.flush()
+    first = AgentOutbox(run_id=run_id, kind="harness.execute", created_at=_AT)
+    later = AgentOutbox(
+        run_id=run_id,
+        kind="agent.stream.execute",
+        created_at=_AT + timedelta(seconds=1),
+    )
+    db.add_all([later, first])
+    await db.commit()
+
+    assert await submission_mod._existing_outbox_id(db, run_id) == str(first.id)
+
+
+async def test_fail_queued_submission_leaves_a_resume_row_alone(
+    db: AsyncSession,
+) -> None:
+    """Retiring the dispatch intent must not retire another kind's row.
+    Mutation: drop ``AgentOutbox.kind.in_(DISPATCH_KINDS)`` from
+    ``fail_queued_submission``'s outbox UPDATE; the resume row then reads
+    ``failed``."""
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    db.add(
+        AgentOutbox(
+            run_id=accepted.run_id,
+            organization_id=ORG_A,
+            kind=submission_mod.HANDOFF_RESUME_KIND,
+        )
+    )
+    await db.commit()
+
+    assert await submission_mod.fail_queued_submission(
+        db,
+        run_id=accepted.run_id,
+        thread_id=THREAD_ID,
+        organization_id=ORG_A,
+        user_id=USER_A,
+        error_code="stream_not_dispatched",
+        error="not started",
+        payload={"code": "stream_not_dispatched", "message": "not started"},
+    )
+
+    rows = dict(
+        (
+            await db.execute(
+                select(AgentOutbox.kind, AgentOutbox.status).where(
+                    AgentOutbox.run_id == accepted.run_id
+                )
+            )
+        ).all()
+    )
+    assert rows == {
+        submission_mod.DISPATCH_KIND_STREAM: AgentOutboxStatus.FAILED.value,
+        submission_mod.HANDOFF_RESUME_KIND: AgentOutboxStatus.PENDING.value,
+    }
 
 
 async def test_idempotency_race_attaches_to_the_winner(
@@ -391,6 +490,46 @@ async def test_thread_rejects_active_writer_until_it_is_terminal(
     assert [e.event_type for e in closing] == [
         RunEventType.RUN_CREATED.value,
     ]
+
+
+async def test_insert_race_with_a_handoff_family_conflicts(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The accept fallback re-read ignores the parent's handoff child.
+
+    A ``delegated`` parent and its running Codex child share the thread. The
+    pre-insert check is suppressed (the racer's snapshot predates the parent),
+    so the real index violation reaches the ``IntegrityError`` fallback.
+
+    Mutation check: drop ``top_level_run()`` from the fallback ``active_job_id``
+    select in ``accept_submission`` and this fails with ``MultipleResultsFound``.
+    """
+    parent_id = str(uuid.uuid4())
+    for job_id, status, parent, provider in (
+        (parent_id, JobStatus.DELEGATED.value, None, "nous"),
+        (str(uuid.uuid4()), JobStatus.RUNNING.value, parent_id, "codex"),
+    ):
+        db.add(
+            AgentRun(
+                job_id=job_id,
+                organization_id=ORG_A,
+                user_id=USER_A,
+                thread_id=THREAD_ID,
+                status=status,
+                parent_run_id=parent,
+                execution_provider=provider,
+            )
+        )
+        await db.commit()
+
+    async def racer_saw_no_active_run(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(submission_mod, "_ensure_thread_idle", racer_saw_no_active_run)
+    with pytest.raises(ActiveRunConflict):
+        await accept_submission(
+            db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+        )
 
 
 async def test_fresh_turn_atomically_abandons_awaiting_confirmation(
