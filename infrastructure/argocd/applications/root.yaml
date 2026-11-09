@@ -12,7 +12,7 @@ spec:
 
   # Points at the directory containing staging.yaml and production.yaml
   source:
-    repoURL: https://github.com/Goodwiinz/rag.git
+    repoURL: https://github.com/goodwiins/NOUS-Research-Assistant.git
     targetRevision: develop
     path: infrastructure/argocd/applications
 

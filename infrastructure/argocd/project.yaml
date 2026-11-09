@@ -10,6 +10,9 @@ spec:
 
   # Allowed source repos: this Git repo + Helm registries we pull operators from
   sourceRepos:
+    - "https://github.com/goodwiins/NOUS-Research-Assistant.git"
+    # Pre-transfer URL (Goodwiinz org, then renamed). Keep until every live
+    # Application has synced to the URL above, then remove.
     - "https://github.com/Goodwiinz/rag.git"
     - "https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts"
 

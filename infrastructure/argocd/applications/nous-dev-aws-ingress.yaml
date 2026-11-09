@@ -21,7 +21,7 @@ spec:
   project: nous-platform
 
   source:
-    repoURL: https://github.com/Goodwiinz/rag.git
+    repoURL: https://github.com/goodwiins/NOUS-Research-Assistant.git
     targetRevision: develop
     path: infrastructure/kubernetes/overlays/aws-dev
 
