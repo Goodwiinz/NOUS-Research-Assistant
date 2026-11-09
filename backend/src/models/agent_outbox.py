@@ -41,6 +41,20 @@ AGENT_OUTBOX_STATUS_CHECK = (
     "status IN (" + ", ".join(f"'{s.value}'" for s in AgentOutboxStatus) + ")"
 )
 
+# Dispatch kind for a turn executed in-process by the SSE stream generator.
+DISPATCH_KIND_STREAM = "agent.stream.execute"
+# Dispatch kind for a turn handed to the paired machine's local Codex.
+HARNESS_EXECUTE_KIND = "harness.execute"
+# A run's own dispatch row is one of these. A run can hold other rows too (a
+# finished handoff child also has a ``handoff.resume`` row), so every read or
+# retirement of "the run's dispatch record" must filter on these kinds, never
+# on ``run_id`` alone. A new dispatch kind must be added here.
+DISPATCH_KINDS: tuple[str, ...] = (DISPATCH_KIND_STREAM, HARNESS_EXECUTE_KIND)
+# A finished machine-handoff child's promise to resume its parent's graph.
+# Keyed by the CHILD run id (uq_agent_outbox_run_kind) so one parent can hand
+# off more than once; claimed exactly once by the resume drain.
+HANDOFF_RESUME_KIND = "handoff.resume"
+
 
 class AgentOutbox(BaseModel):
     """One durable dispatch intent for an accepted agent run."""

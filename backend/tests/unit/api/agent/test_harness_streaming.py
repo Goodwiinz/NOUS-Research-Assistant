@@ -9,6 +9,7 @@ from src.api.agent import harness_streaming
 from src.core.config import settings
 from src.schemas.integration_context import IntegrationContext
 from src.services.agent.run_event_types import RunEventType
+from src.services.harness import chat_context
 from src.services.integrations.context import (
     DeviceBoundToAnotherChat,
     DeviceNotConnectedToProject,
@@ -158,7 +159,7 @@ async def test_a_computer_without_access_to_the_project_is_named(
 ) -> None:
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
     monkeypatch.setattr(
-        harness_streaming,
+        chat_context,
         "_authorize_chat_run",
         AsyncMock(side_effect=IntegrationAccessDenied()),
     )
@@ -172,7 +173,7 @@ async def test_a_chat_bound_computer_keeps_its_own_refusal(
 ) -> None:
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
     monkeypatch.setattr(
-        harness_streaming,
+        chat_context,
         "_authorize_chat_run",
         AsyncMock(side_effect=DeviceBoundToAnotherChat()),
     )
@@ -186,7 +187,7 @@ async def test_server_policy_refusals_stay_generic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     authorize = AsyncMock()
-    monkeypatch.setattr(harness_streaming, "_authorize_chat_run", authorize)
+    monkeypatch.setattr(chat_context, "_authorize_chat_run", authorize)
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
     with pytest.raises(ValueError, match="disabled by server policy"):
         await _start_codex()
@@ -204,7 +205,7 @@ async def test_a_failed_binding_is_not_a_denial_the_user_can_fix(
     # it keeps the generic treatment instead of blaming the user's computer.
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
     monkeypatch.setattr(
-        harness_streaming,
+        chat_context,
         "_authorize_chat_run",
         AsyncMock(side_effect=PermissionError("could not bind")),
     )
@@ -221,7 +222,7 @@ async def test_a_folder_this_chat_cannot_use_is_named(
     # and nothing is minted.
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
     mint = AsyncMock()
-    monkeypatch.setattr(harness_streaming, "mint_integration_grant", mint)
+    monkeypatch.setattr(chat_context, "mint_integration_grant", mint)
     db = SimpleNamespace(scalar=AsyncMock(return_value=None))
     with pytest.raises(DeviceNotConnectedToProject):
         await _start_codex(db)
