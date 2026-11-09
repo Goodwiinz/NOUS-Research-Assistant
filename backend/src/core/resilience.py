@@ -260,51 +260,48 @@ class Bulkhead:
         effective_timeout = timeout or self.queue_timeout
         start_time = time.time()
 
-        # Check if we can queue
+        # Reserve capacity atomically: running + waiting may not exceed
+        # max_concurrent + max_queue. Checking _current alone let a burst all
+        # pass before any of them incremented it (it only rose after the
+        # semaphore was acquired), so the queue limit was never enforced and
+        # excess callers waited until timeout instead of failing fast.
         async with self._lock:
-            if self._current >= self.max_concurrent:
-                if self.max_queue > 0 and self._queue_size < self.max_queue:
-                    self._queue_size += 1
-                else:
-                    self._total_rejected += 1
-                    raise BulkheadFullError(self.name, self.max_concurrent)
+            if self._current + self._queue_size >= self.max_concurrent + self.max_queue:
+                self._total_rejected += 1
+                raise BulkheadFullError(self.name, self.max_concurrent)
+            self._queue_size += 1
 
         try:
-            # Try to acquire semaphore with timeout
-            acquired = await asyncio.wait_for(
-                self._semaphore.acquire(),
-                timeout=effective_timeout,
-            )
-
-            if not acquired:
-                async with self._lock:
-                    self._total_rejected += 1
-                raise BulkheadFullError(self.name, self.max_concurrent)
-
-            async with self._lock:
-                self._current += 1
-                self._total_acquired += 1
-                if self._queue_size > 0:
-                    self._queue_size -= 1
-                wait_time = time.time() - start_time
-                self._wait_times.append(wait_time)
-                # Keep only last 100 wait times
-                if len(self._wait_times) > 100:
-                    self._wait_times = self._wait_times[-100:]
-
-            try:
-                yield
-            finally:
-                self._semaphore.release()
-                async with self._lock:
-                    self._current -= 1
-
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             async with self._lock:
+                self._queue_size -= 1
                 self._total_rejected += 1
-                if self._queue_size > 0:
-                    self._queue_size -= 1
             raise
+        except BaseException:
+            # Cancelled while waiting: give the reservation back.
+            async with self._lock:
+                self._queue_size -= 1
+            raise
+
+        async with self._lock:
+            self._queue_size -= 1
+            self._current += 1
+            self._total_acquired += 1
+            self._wait_times.append(time.time() - start_time)
+            # Keep only last 100 wait times
+            if len(self._wait_times) > 100:
+                self._wait_times = self._wait_times[-100:]
+
+        # The guarded body runs outside the reservation handlers above, so a
+        # TimeoutError raised by the caller's own code is not miscounted as a
+        # bulkhead rejection.
+        try:
+            yield
+        finally:
+            self._semaphore.release()
+            async with self._lock:
+                self._current -= 1
 
     def get_stats(self) -> BulkheadStats:
         """Get current bulkhead statistics."""
