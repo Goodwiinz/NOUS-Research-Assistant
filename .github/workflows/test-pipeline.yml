@@ -288,10 +288,15 @@ jobs:
   # precondition for evidence_prov_20260816, runs the real upgrade and
   # downgrade, and verifies both column contracts. It creates its own
   # generated scratch database so it cannot interfere with the advisory legacy
-  # replay that follows. The legacy from-empty upgrade, `alembic check`, and
-  # downgrade/upgrade smoke remain visible ADVISORY measurements because the
-  # historical chain carries known bootstrap/create-migration debt. A failure
-  # in an advisory measurement is always recorded as FAIL, never PASS.
+  # replay that follows. `alembic check` (models vs migrations drift) is
+  # BLOCKING too: against the from-empty database it must report no upgrade
+  # operations, so every index, constraint and column the migrations build is
+  # declared on the models or listed as migration-owned in alembic/env.py
+  # (MIGRATION_OWNED_*_REVISIONS). It runs on the replay's database, so a
+  # replay that never reaches head fails it as well. The legacy from-empty
+  # upgrade and downgrade/upgrade smoke remain visible ADVISORY measurements
+  # because the historical chain carries known bootstrap debt. A failure in an
+  # advisory measurement is always recorded as FAIL, never PASS.
   #
   # Why these steps need the FULL backend requirements (not just alembic): the
   # static guard reads only ScriptDirectory, but `alembic upgrade head` EXECUTES
@@ -394,8 +399,7 @@ jobs:
             echo "- Alembic upgrade head (from empty): :x: FAIL (rc=$rc) — advisory measurement only; legacy chain is not a blocking contract" >> "$GITHUB_STEP_SUMMARY"
           fi
           exit $rc
-      - name: Advisory — alembic check (models vs migrations drift)
-        continue-on-error: true
+      - name: Blocking — alembic check (models vs migrations drift)
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -407,7 +411,7 @@ jobs:
           if [ "$rc" -eq 0 ]; then
             echo "- Alembic check (drift): :white_check_mark: PASS" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- Alembic check (drift): :x: FAIL (rc=$rc) — advisory, model/migration drift" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Alembic check (drift): :x: FAIL (rc=$rc) — BLOCKING; models and migrations disagree (declare the object on the model, or list it as migration-owned in backend/alembic/env.py), or the from-empty upgrade above did not reach head" >> "$GITHUB_STEP_SUMMARY"
           fi
           exit $rc
       - name: Advisory — downgrade -1 then upgrade head (round-trip smoke)

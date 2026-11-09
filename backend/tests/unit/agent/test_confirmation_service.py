@@ -118,9 +118,12 @@ async def test_old_receipt_cannot_approve_next_interrupt_in_same_node() -> None:
     await graph.ainvoke(Command(resume=first.resume(True)), config)
     saved_second = await graph.aget_state(config)
     second = _approval(saved_second)
-    # LangGraph reuses the task interrupt id for sequential calls inside one
-    # node. The saved checkpoint AND action digest must therefore bind it.
-    assert first.interrupt_id == second.interrupt_id
+    # LangGraph <=1.2.19 reused the task interrupt id for sequential calls
+    # inside one node; 1.2.20 issues a fresh id per call. Both gates share the
+    # saved checkpoint_id, so here the differing action payload (and, on
+    # >=1.2.20, the per-call interrupt id) is what gives the two gates
+    # distinct approvals; see test_identical_sequential_gates_get_distinct_
+    # receipts for the identical-payload case.
     assert first.approval_id != second.approval_id
     with pytest.raises(ApprovalExpired):
         require_approval(
@@ -144,6 +147,52 @@ async def test_old_receipt_cannot_approve_next_interrupt_in_same_node() -> None:
         require_approval(
             await graph.aget_state(config),
             approval_id=second.approval_id,
+            thread_id="thread",
+            run_id="run",
+            user_id="user",
+        )
+
+
+def identical_gate_graph(checkpointer: Any) -> Any:
+    """Two sequential gates in one node with byte-identical payloads."""
+
+    def actions(state: ApprovalState) -> dict[str, bool]:
+        payload = {"tools": [{"name": "same", "args": {"id": "x"}}]}
+        first = interrupt(payload)
+        second = interrupt(payload)
+        return {"first": first["confirmed"], "second": second["confirmed"]}
+
+    builder = StateGraph(ApprovalState)
+    builder.add_node("actions", actions)
+    builder.add_edge(START, "actions")
+    builder.add_edge("actions", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+async def test_identical_sequential_gates_get_distinct_receipts() -> None:
+    # Both gates share one task and one saved checkpoint_id, and the action
+    # digest is identical, so only the per-call interrupt id (LangGraph
+    # >=1.2.20) separates them. requirements.txt pins that floor; on <=1.2.19
+    # the two gates collapse to one approval id and the first receipt would
+    # approve the second.
+    graph = identical_gate_graph(InMemorySaver())
+    config = {"configurable": {"thread_id": "thread"}}
+    await graph.ainvoke({"user_id": "user"}, config)
+    first_state = await graph.aget_state(config)
+    first = _approval(first_state)
+    await graph.ainvoke(Command(resume=first.resume(True)), config)
+    saved_second = await graph.aget_state(config)
+    second = _approval(saved_second)
+
+    assert (
+        first_state.config["configurable"]["checkpoint_id"]
+        == saved_second.config["configurable"]["checkpoint_id"]
+    )
+    assert first.approval_id != second.approval_id
+    with pytest.raises(ApprovalExpired):
+        require_approval(
+            saved_second,
+            approval_id=first.approval_id,
             thread_id="thread",
             run_id="run",
             user_id="user",

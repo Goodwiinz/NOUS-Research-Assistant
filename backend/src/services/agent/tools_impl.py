@@ -2617,6 +2617,13 @@ _ARXIV_VENUE_STOPWORDS = {
 }
 
 
+# search_arxiv's default lookback when the caller sets no window.
+_ARXIV_DEFAULT_RECENCY_DAYS = 365
+
+# A balanced ASCII double-quoted span ("exact phrase").
+_ARXIV_QUOTED_SPAN_RE = re.compile(r'("[^"]*")')
+
+
 def _sanitize_arxiv_query(q: str) -> str:
     """Drop recency/filler and venue tokens, plus duplicate terms, so they
     don't pollute or dead-end arXiv's all-field search (e.g. 'recent papers on
@@ -2627,12 +2634,22 @@ def _sanitize_arxiv_query(q: str) -> str:
     strip = _ARXIV_STOPWORDS | _ARXIV_VENUE_STOPWORDS
     kept: List[str] = []
     seen: set = set()
-    for t in q.split():
-        norm = re.sub(r"[^a-z0-9]", "", t.lower())
-        if not norm or norm in strip or norm in seen:
+    # Quoted spans are exact phrases (usually a paper title): keep them
+    # verbatim. Filtering tokens inside them dropped quote-attached stopwords
+    # ('"A', 'on') together with the quote and left an unbalanced phrase.
+    # Curly quotes are not arXiv phrase syntax; normalize them first.
+    normalized = q.replace("\u201c", '"').replace("\u201d", '"')
+    for part in _ARXIV_QUOTED_SPAN_RE.split(normalized):
+        if _ARXIV_QUOTED_SPAN_RE.fullmatch(part):
+            if part.strip('" '):
+                kept.append(part)
             continue
-        seen.add(norm)
-        kept.append(t)
+        for t in part.split():
+            norm = re.sub(r"[^a-z0-9]", "", t.lower())
+            if not norm or norm in strip or norm in seen:
+                continue
+            seen.add(norm)
+            kept.append(t)
     cleaned = " ".join(kept).strip()
     return cleaned or q
 
@@ -2845,7 +2862,68 @@ async def _tool_search_arxiv(
     or_terms: Optional[str] = None,
     max_gate_wait_s: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Search arXiv for papers.
+    """Search arXiv; widen an implicit recency window once when it is empty.
+
+    The default 12-month window serves "find recent X", but it turned an exact
+    title lookup of an older paper ("Attention Is All You Need") into "No arXiv
+    papers matched". When the caller set no window of its own (no
+    ``recency_days``, no ``published_after``/``published_before``) and is a
+    plain search (no ``or_terms``: ``discover_papers`` reads depth from the
+    window), an empty result is retried once over all time. The retry passes
+    ``recency_days=0`` explicitly, so it never widens again. See
+    ``_search_arxiv_once`` for the search itself.
+    """
+    result = await _search_arxiv_once(
+        args,
+        max_results_cap=max_results_cap,
+        or_terms=or_terms,
+        max_gate_wait_s=max_gate_wait_s,
+    )
+    # The default window counts as implicit whether omitted or passed as
+    # 365: the research prompt teaches the model to pass recency_days=365,
+    # which is the default, not a narrower intent. Any other explicit window
+    # (e.g. 30 days) is the caller's intent and is never widened.
+    try:
+        window_days = int(args.get("recency_days", _ARXIV_DEFAULT_RECENCY_DAYS))
+    except (TypeError, ValueError):
+        window_days = _ARXIV_DEFAULT_RECENCY_DAYS
+    implicit_window = (
+        window_days == _ARXIV_DEFAULT_RECENCY_DAYS
+        and not args.get("published_after")
+        and not args.get("published_before")
+        and or_terms is None
+    )
+    if not implicit_window or "error" in result or result.get("papers"):
+        return result
+    widened = await _search_arxiv_once(
+        {**args, "recency_days": 0},
+        max_results_cap=max_results_cap,
+        or_terms=or_terms,
+        max_gate_wait_s=max_gate_wait_s,
+    )
+    if "error" in widened or not widened.get("papers"):
+        return result
+    # Say so: unlabelled, all-time papers read as an answer to "recent X".
+    return {
+        **widened,
+        "recency_widened": True,
+        "warning": (
+            f"No arXiv papers matched within the last "
+            f"{_ARXIV_DEFAULT_RECENCY_DAYS} days, so these results are from "
+            "all time (no date filter). Check each paper's published date and "
+            "do not describe them as recent."
+        ),
+    }
+
+
+async def _search_arxiv_once(
+    args: Dict[str, Any],
+    *,
+    max_results_cap: int = _ARXIV_TOOL_MAX_RESULTS,
+    or_terms: Optional[str] = None,
+    max_gate_wait_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Search arXiv for papers (one request, no recency widening).
 
     The keyword arguments are Python arguments, not tool arguments, so a model
     cannot set them. Every agent and read-tool caller leaves them at their

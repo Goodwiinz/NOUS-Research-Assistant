@@ -3,7 +3,8 @@
  * Monitors and displays the health status of the knowledge graph
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
@@ -116,37 +117,38 @@ const normalizeHealthStatus = (
 };
 
 export const GraphHealthMonitor: React.FC = () => {
-  const [health, setHealth] = useState<GraphHealthStatus | null>(null);
-  const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(false);
 
-  useEffect(() => {
-    fetchHealth();
-  }, []);
+  // TanStack Query owns this request-backed state (one cache owner per server
+  // entity); it replaces a hand-rolled fetch whose mount effect referenced the
+  // fetcher before its declaration and set state synchronously.
+  const {
+    data: health = null,
+    error,
+    isFetching: loading,
+    refetch,
+  } = useQuery({
+    queryKey: ['knowledge-graph', 'health'],
+    queryFn: async () =>
+      normalizeHealthStatus(
+        await api.get<Partial<GraphHealthStatus & BackendGraphHealthStatus>>(
+          '/knowledge-graph/health'
+        )
+      ),
+    refetchInterval: autoRefresh ? 30000 : false, // Refresh every 30s
+    // A health monitor reports current state: fetch on every mount (the app
+    // default caches for 5 min) and surface a failure at once instead of
+    // after three backoff retries.
+    staleTime: 0,
+    retry: false,
+  });
 
   useEffect(() => {
-    if (autoRefresh) {
-      const interval = setInterval(fetchHealth, 30000); // Refresh every 30s
-      return () => clearInterval(interval);
-    }
-  }, [autoRefresh]);
-
-  const fetchHealth = async () => {
-    try {
-      setLoading(true);
-      const data = await api.get<
-        Partial<GraphHealthStatus & BackendGraphHealthStatus>
-      >(
-        'knowledge-graph/health'
-      );
-      setHealth(normalizeHealthStatus(data));
-    } catch (error) {
+    if (error) {
       console.error('Error fetching health:', error);
       toast.error('Failed to fetch graph health');
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [error]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -237,7 +239,7 @@ export const GraphHealthMonitor: React.FC = () => {
             {autoRefresh ? 'Auto-refresh: ON' : 'Auto-refresh: OFF'}
           </Button>
           <Button
-            onClick={fetchHealth}
+            onClick={() => void refetch()}
             disabled={loading}
             variant="outline"
             size="sm"

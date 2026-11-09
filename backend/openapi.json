@@ -67333,7 +67333,7 @@
     },
     "/api/v2/threads/{thread_id}/summarize": {
       "post": {
-        "description": "Regenerate AI summary for a thread.\n\nForces regeneration regardless of rate limits.",
+        "description": "Regenerate AI summary for a thread.\n\nBypasses the summarization service's staleness throttle (force=True); the\nHTTP endpoint itself is rate limited per user. Requires edit rights.",
         "operationId": "regenerate_thread_summary_api_v2_threads__thread_id__summarize_post",
         "parameters": [
           {

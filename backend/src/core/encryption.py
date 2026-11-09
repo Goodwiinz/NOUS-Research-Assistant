@@ -484,8 +484,11 @@ class FieldEncryption:
             decrypted_data = self.aes_encryption.decrypt(encrypted_payload)
             return decrypted_data.decode("utf-8")
         except Exception as e:
-            logger.error(f"Failed to decrypt field {field_name}: {str(e)}")
-            raise DataEncryptionError(f"Field decryption failed: {str(e)}")
+            # Don't log here: the caller (EncryptedType.process_result_value)
+            # knows whether this is real ciphertext that failed (ERROR) or a
+            # legacy plaintext row (DEBUG, returned raw). Logging ERROR for
+            # every plaintext row sent an error per request to Sentry.
+            raise DataEncryptionError(f"Field decryption failed: {str(e)}") from e
 
 
 class FileEncryption:

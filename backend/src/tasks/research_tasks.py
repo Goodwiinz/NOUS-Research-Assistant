@@ -32,6 +32,7 @@ from src.services.research_engine.providers import (
     ProviderConfig,
 )
 from src.services.research_engine.step_executor import StepExecutor
+from src.tasks._async_utils import run_async
 from src.tasks.processing_tasks import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -219,7 +220,9 @@ def run_extraction_matrix(
     """
     from src.services.research.extraction_matrix_service import ExtractionMatrixService
 
-    asyncio.run(
+    # Shared per-process loop: AsyncSessionLocal's pooled engine must not
+    # hand out connections created on a loop asyncio.run already closed.
+    run_async(
         ExtractionMatrixService().run_background_extraction(
             matrix_id=UUID(matrix_id),
             document_ids=[UUID(document_id) for document_id in document_ids],

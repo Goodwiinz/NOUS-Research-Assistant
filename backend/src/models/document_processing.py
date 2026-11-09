@@ -15,6 +15,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -112,6 +113,19 @@ class ProcessingHistory(BaseModel):
         ),
         CheckConstraint("duration_seconds >= 0", name="check_duration_positive"),
         CheckConstraint("retry_count >= 0", name="check_retry_non_negative"),
+        # Created by f931599b6b5b_enhance_document_processing.
+        Index(
+            "idx_processing_history_document_stage",
+            "document_id",
+            "stage",
+            "created_at",
+        ),
+        Index(
+            "idx_processing_history_org_status",
+            "organization_id",
+            "status",
+            "stage",
+        ),
     )
 
     def __repr__(self):
@@ -265,6 +279,19 @@ class MultimodalContent(BaseModel):
         CheckConstraint(
             "media_duration_seconds >= 0", name="check_media_duration_positive"
         ),
+        # Created by f931599b6b5b_enhance_document_processing.
+        Index(
+            "idx_multimodal_content_document_type",
+            "document_id",
+            "content_type",
+            "sequence_order",
+        ),
+        Index(
+            "idx_multimodal_content_indexed",
+            "is_indexed",
+            "content_type",
+            "organization_id",
+        ),
     )
 
     def __repr__(self):
@@ -330,6 +357,19 @@ class DocumentQualityMetrics(BaseModel):
         CheckConstraint(
             "confidence_score >= 0 AND confidence_score <= 1",
             name="check_confidence_score_range",
+        ),
+        # Created by f931599b6b5b_enhance_document_processing.
+        Index(
+            "idx_quality_metrics_document_type",
+            "document_id",
+            "metric_type",
+            "created_at",
+        ),
+        Index(
+            "idx_quality_metrics_threshold",
+            "meets_threshold",
+            "metric_type",
+            "organization_id",
         ),
     )
 
@@ -404,6 +444,15 @@ class DocumentAccessLog(BaseModel):
         CheckConstraint("response_time_ms >= 0", name="check_response_time_positive"),
         CheckConstraint(
             "threat_score >= 0 AND threat_score <= 1", name="check_threat_score_range"
+        ),
+        # Created by f931599b6b5b_enhance_document_processing.
+        Index("idx_access_log_document_time", "document_id", "created_at"),
+        Index("idx_access_log_user_time", "user_id", "created_at"),
+        Index(
+            "idx_access_log_suspicious",
+            "is_suspicious",
+            "threat_score",
+            "created_at",
         ),
     )
 

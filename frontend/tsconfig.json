@@ -89,7 +89,6 @@
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/services/monitoringWebsocketService.ts",
-    "src/services/searchService.ts",
     "src/hooks/useAnalyticsTracking.ts",
     "src/components/analytics/AnalyticsProvider.tsx",
     "src/utils/analytics/**/*",

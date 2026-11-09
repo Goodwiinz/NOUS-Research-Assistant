@@ -1,0 +1,509 @@
+{
+  "projectId": "fa7828f2-1a46-48ca-9597-098bc5cf1514",
+  "pkg": "@nous/design-system",
+  "globalName": "Nous",
+  "shape": "package",
+  "entry": ".design-sync/pkg/index.ts",
+  "buildCmd": "node .design-sync/pkg/gen-entry.mjs && node .design-sync/pkg/build-types.mjs && node .design-sync/pkg/build-css.mjs",
+  "srcDir": "../../src",
+  "tsconfig": "tsconfig.bundle.json",
+  "cssEntry": "styles.css",
+  "componentSrcMap": {
+    "NousNav": "../../app/components/nous/nous-nav.tsx",
+    "NousChatComposer": "../../app/components/nous/nous-chat-composer.tsx",
+    "NousSourceCard": "../../app/components/nous/nous-source-card.tsx",
+    "NousAgentStatusCard": "../../app/components/nous/nous-agent-status-card.tsx",
+    "Pagination": "../../app/components/Pagination.tsx",
+    "Sidebar": "../../src/components/ui/sidebar.tsx"
+  },
+  "docsDir": "docs",
+  "extraEntries": [
+    "./env-shim.ts",
+    "./provider.tsx"
+  ],
+  "provider": {
+    "component": "NousProvider"
+  },
+  "overrides": {
+    "Dialog": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogTitle": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogOverlay": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogOverlay": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DeleteConfirmDialog": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogFooter": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogDescription": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "ConfirmDialog": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogFooter": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialog": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogDescription": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogHeader": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogPortal": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogContent": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogContent": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogCancel": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogHeader": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogPortal": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogTitle": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogAction": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "NewChatDialog": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogClose": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "AlertDialogTrigger": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "DialogTrigger": {
+      "cardMode": "single",
+      "viewport": "720x460"
+    },
+    "Sheet": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetPortal": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetHeader": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetClose": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetOverlay": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetDescription": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetTitle": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetTrigger": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetFooter": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "SheetContent": {
+      "cardMode": "single",
+      "viewport": "900x560"
+    },
+    "DropdownMenu": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuGroup": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuLabel": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "PopoverContent": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuSubContent": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "TooltipProvider": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuShortcut": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuCheckboxItem": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuSubTrigger": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "Popover": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "PopoverTrigger": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "HoverCardContent": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuRadioItem": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuContent": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuSeparator": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuSub": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuItem": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "TooltipTrigger": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuRadioGroup": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuPortal": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "TooltipContent": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "Tooltip": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "HoverCard": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "DropdownMenuTrigger": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "HoverCardTrigger": {
+      "cardMode": "single",
+      "viewport": "640x420"
+    },
+    "SelectItem": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectTrigger": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "Select": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectSeparator": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectContent": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectScrollUpButton": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectLabel": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectGroup": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectScrollDownButton": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SelectValue": {
+      "cardMode": "single",
+      "viewport": "560x420"
+    },
+    "SidebarMenuSubItem": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarFooter": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuAction": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarRail": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarTrigger": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarGroup": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuSkeleton": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuSubButton": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarInput": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarContent": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarGroupLabel": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuItem": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarInset": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenu": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarGroupContent": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarHeader": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "Sidebar": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuBadge": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarToggle": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarSeparator": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuButton": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarProvider": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarMenuSub": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarLayout": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "SidebarGroupAction": {
+      "cardMode": "single",
+      "viewport": "960x560"
+    },
+    "NavigationMenuItem": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuTrigger": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenu": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuContent": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuIndicator": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuList": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuViewport": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "NavigationMenuLink": {
+      "cardMode": "single",
+      "viewport": "800x420"
+    },
+    "DocumentCard": {
+      "cardMode": "column"
+    },
+    "NousNav": {
+      "cardMode": "column"
+    },
+    "Breadcrumb": {
+      "cardMode": "column"
+    },
+    "Card": {
+      "cardMode": "column"
+    },
+    "Carousel": {
+      "cardMode": "column"
+    },
+    "Collapsible": {
+      "cardMode": "column"
+    },
+    "ComesInGoesOutUnderline": {
+      "cardMode": "column"
+    },
+    "FormField": {
+      "cardMode": "column"
+    },
+    "GoesOutComesInUnderline": {
+      "cardMode": "column"
+    },
+    "Input": {
+      "cardMode": "column"
+    },
+    "Label": {
+      "cardMode": "column"
+    },
+    "Plan": {
+      "cardMode": "column"
+    },
+    "Progress": {
+      "cardMode": "column"
+    },
+    "ScrollArea": {
+      "cardMode": "column"
+    },
+    "Separator": {
+      "cardMode": "column"
+    },
+    "Skeleton": {
+      "cardMode": "column"
+    },
+    "Slider": {
+      "cardMode": "column"
+    },
+    "Switch": {
+      "cardMode": "column"
+    },
+    "Tabs": {
+      "cardMode": "column"
+    },
+    "Textarea": {
+      "cardMode": "column"
+    },
+    "ThemeToggle": {
+      "cardMode": "column"
+    },
+    "Pagination": {
+      "cardMode": "column"
+    }
+  },
+  "storyImports": {
+    "bundle": [
+      ".design-sync/previews/"
+    ]
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

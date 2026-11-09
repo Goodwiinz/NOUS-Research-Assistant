@@ -30,6 +30,8 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
 _loop_pid: Optional[int] = None
 _lock = threading.Lock()
+# Upper bound on waiting for a cancelled coroutine to unwind.
+_CANCEL_GRACE_SECONDS = 5.0
 
 
 def _run_forever(loop: asyncio.AbstractEventLoop) -> None:
@@ -78,11 +80,29 @@ def run_async(coro: Coroutine[Any, Any, T], *, timeout: Optional[float] = None) 
     exception raised inside the coroutine propagates unchanged.
     """
     loop = _ensure_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    started = threading.Event()
+    finished = threading.Event()
+
+    async def _tracked() -> T:
+        started.set()
+        try:
+            return await coro
+        finally:
+            finished.set()
+
+    future = asyncio.run_coroutine_threadsafe(_tracked(), loop)
     try:
         return future.result(timeout)
     except BaseException:
-        # A timeout (or KeyboardInterrupt) leaves the coroutine running on the
-        # loop thread; cancel it so it does not leak. A no-op if already done.
+        # A timeout, soft time limit or KeyboardInterrupt leaves the coroutine
+        # running on the loop thread; cancel it so it does not leak. A no-op
+        # if already done.
         future.cancel()
+        # The returned future reports "cancelled" before the coroutine has
+        # unwound. Wait (bounded) for it to finish, so the caller's handlers
+        # (db.rollback(), job status writes) don't run on the task thread
+        # while the coroutine still touches the same sync Session/ORM objects
+        # on the loop thread. Skip the wait if it never started.
+        if started.is_set():
+            finished.wait(_CANCEL_GRACE_SECONDS)
         raise

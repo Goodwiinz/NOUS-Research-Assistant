@@ -86,3 +86,16 @@ temp/
 # AI Elements reference scratch (MCP comparison, not shipped)
 .scratch-ai-elements/
 playwright-smoke-report/
+
+# design-sync (/design-sync skill): staged converter, build output, machine state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/pkg/types/
+.design-sync/pkg/styles.css
+.design-sync/pkg/index.ts
+.design-sync/pkg/katex-shim.css
+.design-sync/pkg/tsconfig.bundle.json
+.design-sync/pkg/docs/

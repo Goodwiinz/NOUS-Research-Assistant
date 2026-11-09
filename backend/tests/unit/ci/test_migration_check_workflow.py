@@ -1,9 +1,12 @@
 """Workflow contracts for the Alembic migration-check job.
 
-The static single-head/revision-length guard is blocking. The historical
-from-empty replay, ``alembic check`` drift check, and downgrade/upgrade smoke
-remain visible advisory measurements because they exercise the entire legacy
-chain. The evidence migration additionally has a narrow blocking delta probe:
+The static single-head/revision-length guard is blocking, and so is the
+``alembic check`` models-vs-migrations drift check: the models declare what
+the migrations build, and the remaining migration-owned objects are listed in
+``backend/alembic/env.py``. The historical from-empty replay and the
+downgrade/upgrade smoke remain visible advisory measurements because they
+exercise the entire legacy chain. The evidence migration additionally has a
+narrow blocking delta probe:
 it establishes only the exact parent-state precondition, runs the real
 ``evidence_prov_20260816`` upgrade, checks the two columns, downgrades to the
 parent, and checks that both columns are gone.
@@ -117,15 +120,33 @@ def test_targeted_probe_uses_separate_scratch_database() -> None:
     assert "ci_evidence_delta_" not in str(replay_env.get("DATABASE_URL", ""))
 
 
-def test_alembic_check_drift_is_advisory() -> None:
-    """``alembic check`` (models-vs-migrations drift) runs advisory."""
-    step = _step_named("Advisory — alembic check (models vs migrations drift)")
-    assert "alembic check" in (step.get("run") or "")
-    assert step.get("continue-on-error") is True, (
-        "drift check must be advisory (continue-on-error: true) — the schema is "
-        "known to carry create-migration debt today"
+DRIFT_CHECK_STEP = "Blocking — alembic check (models vs migrations drift)"
+
+
+def test_alembic_check_drift_is_blocking() -> None:
+    """``alembic check`` (models-vs-migrations drift) blocks the job."""
+    step = _step_named(DRIFT_CHECK_STEP)
+    run = step.get("run") or ""
+    assert "alembic check" in run
+    assert "continue-on-error" not in step, (
+        "the drift check is a blocking contract: a model that stops matching "
+        "the migrations must fail the job, not just annotate it"
     )
-    assert "advisory" in (step.get("name") or "").lower()
+    assert "blocking" in (step.get("name") or "").lower()
+    assert "exit $rc" in run, "the step must exit with alembic check's status"
+    assert ":x: FAIL" in run and "BLOCKING" in run, (
+        "a drift failure must be recorded as a BLOCKING FAIL in the summary, "
+        "never as an advisory one"
+    )
+    assert "advisory" not in run.lower()
+
+
+def test_alembic_check_runs_after_the_from_empty_upgrade() -> None:
+    """The drift check compares against the database the replay just built."""
+    names = [step.get("name") for step in _steps()]
+    assert names.index("Advisory — upgrade head from empty DB") < names.index(
+        DRIFT_CHECK_STEP
+    )
 
 
 def test_downgrade_smoke_is_advisory() -> None:
@@ -143,8 +164,8 @@ def test_downgrade_smoke_is_advisory() -> None:
     assert "advisory" in (step.get("name") or "").lower()
 
 
-def test_db_url_passed_via_env_to_advisory_steps() -> None:
-    """env.py reads DATABASE_URL/SUPABASE_DB_URL; the advisory steps must set it.
+def test_db_url_passed_via_env_to_execution_steps() -> None:
+    """env.py reads DATABASE_URL/SUPABASE_DB_URL; the execution steps must set it.
 
     Service-container credentials are CI-local throwaways, so a plain env value
     (postgres/postgres against localhost) is fine and conventional — no secrets
@@ -152,7 +173,7 @@ def test_db_url_passed_via_env_to_advisory_steps() -> None:
     """
     for name, fragment in (
         ("Advisory — upgrade head from empty DB", "alembic upgrade head"),
-        ("Advisory — alembic check (models vs migrations drift)", "alembic check"),
+        (DRIFT_CHECK_STEP, "alembic check"),
         (
             "Advisory — downgrade -1 then upgrade head (round-trip smoke)",
             "alembic downgrade -1",
@@ -167,7 +188,7 @@ def test_db_url_passed_via_env_to_advisory_steps() -> None:
         )
         assert "localhost" in str(
             env["DATABASE_URL"]
-        ), "the advisory steps should target the CI service container on localhost"
+        ), "the execution steps should target the CI service container on localhost"
 
 
 def test_each_probe_writes_to_step_summary() -> None:
@@ -175,7 +196,7 @@ def test_each_probe_writes_to_step_summary() -> None:
     for name in (
         "Blocking — evidence migration delta",
         "Advisory — upgrade head from empty DB",
-        "Advisory — alembic check (models vs migrations drift)",
+        DRIFT_CHECK_STEP,
         "Advisory — downgrade -1 then upgrade head (round-trip smoke)",
     ):
         step = _step_named(name)

@@ -64,3 +64,39 @@ def test_rejected_data_rotation_keeps_fields_decryptable_after_restart(
     stored = field.process_bind_param("Alice after rejected rotation", None)
     encryption.initialize_encryption()
     assert field.process_result_value(stored, None) == "Alice after rejected rotation"
+
+
+def test_plaintext_legacy_value_logs_no_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A legacy/plaintext row is the documented graceful fallback (returned
+    raw, DEBUG only). FieldEncryption.decrypt_field used to log at ERROR before
+    raising, so every load of such a row -- MultiTenancyMiddleware loads the
+    user on each request -- sent an error to Sentry (JAVASCRIPT-NEXTJS-5Q,
+    ~200k/day from one polling browser, exhausting the error quota)."""
+    monkeypatch.setenv("ENCRYPTION_MASTER_KEY", base64.b64encode(b"a" * 32).decode())
+    encryption.initialize_encryption()
+    field = EncryptedString().copy(field_name="first_name")
+
+    with caplog.at_level("DEBUG"):
+        assert field.process_result_value("Alice", None) == "Alice"
+
+    assert [r for r in caplog.records if r.levelname == "ERROR"] == []
+
+
+def test_real_ciphertext_failure_still_logs_one_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    field = EncryptedString().copy(field_name="first_name")
+    monkeypatch.setenv("ENCRYPTION_MASTER_KEY", base64.b64encode(b"a" * 32).decode())
+    encryption.initialize_encryption()
+    stored = field.process_bind_param("Alice", None)
+    monkeypatch.setenv("ENCRYPTION_MASTER_KEY", base64.b64encode(b"b" * 32).decode())
+    encryption.initialize_encryption()
+
+    with caplog.at_level("DEBUG"):
+        assert field.process_result_value(stored, None) is None
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "first_name" in errors[0].getMessage()

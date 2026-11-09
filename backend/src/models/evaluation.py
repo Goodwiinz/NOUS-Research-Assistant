@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -69,7 +70,12 @@ class EvaluationJob(BaseModel):
     """
 
     __tablename__ = "evaluation_jobs"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        # Created by n9p2q3r4s5t6_add_missing_performance_indexes.
+        Index("idx_evaluation_jobs_org_status", "organization_id", "status"),
+        Index("idx_evaluation_jobs_user_created", "user_id", "created_at"),
+        {"extend_existing": True},
+    )
 
     # Basic information
     name = Column(String(255), nullable=False, index=True)

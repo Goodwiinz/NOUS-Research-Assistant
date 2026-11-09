@@ -2,7 +2,7 @@
 GeneratedDraft model for AI-generated literature review drafts (Research Assistant - User Story 5)
 """
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -65,8 +65,24 @@ class GeneratedDraft(BaseModel):
         "DraftCitation", back_populates="draft", cascade="all, delete-orphan"
     )
 
-    # Unique constraint for version per project
-    __table_args__ = ({"schema": None},)  # Use default schema
+    __table_args__ = (
+        # r6_run_integrity_uniques: one row per (project, version) and at most
+        # one current draft per project.
+        Index(
+            "uq_generated_drafts_project_version", "project_id", "version", unique=True
+        ),
+        Index(
+            "uq_generated_drafts_current",
+            "project_id",
+            unique=True,
+            postgresql_where=text("is_current"),
+            sqlite_where=text("is_current"),
+        ),
+        # n9p2q3r4s5t6_add_missing_performance_indexes:
+        Index("idx_generated_drafts_project_version", "project_id", "version"),
+        Index("idx_generated_drafts_project_current", "project_id", "is_current"),
+        {"schema": None},  # Use default schema
+    )
 
     def __repr__(self):
         return f"<GeneratedDraft(project_id={self.project_id}, version={self.version}, title={self.title})>"

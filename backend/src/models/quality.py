@@ -15,6 +15,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -65,6 +66,24 @@ class QualityMetric(BaseModel):
     """Quality metric model for system evaluation"""
 
     __tablename__ = "quality_metrics"
+    __table_args__ = (
+        # z4a5b6c7d8e9_add_quality_metrics_measured_at (duplicates the
+        # ix_quality_metrics_measured_at that measured_at's index=True makes).
+        Index("idx_quality_metrics_measured_at", "measured_at"),
+        # p3q4r5s6t7u8_add_dashboard_performance_indexes:
+        Index(
+            "idx_quality_metrics_org_created_type",
+            "organization_id",
+            "created_at",
+            "metric_type",
+        ),
+        Index(
+            "idx_quality_metrics_org_measured_type",
+            "organization_id",
+            "measured_at",
+            "metric_type",
+        ),
+    )
 
     # Metric information
     # String, not Enum(MetricType): the search-analytics writer stores

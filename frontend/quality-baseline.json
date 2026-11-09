@@ -11,7 +11,6 @@
     "src/components/ui/shadcn-io/**/*",
     "src/hooks/useAnalyticsTracking.ts",
     "src/services/monitoringWebsocketService.ts",
-    "src/services/searchService.ts",
     "src/stores/graphStore.ts",
     "src/stores/monitoringStore.ts",
     "src/trigger/**/*",
@@ -798,8 +797,8 @@
         "warnings": 1
       },
       "src/components/entities/GraphHealthMonitor.tsx": {
-        "errors": 1,
-        "warnings": 5
+        "errors": 0,
+        "warnings": 4
       },
       "src/components/entities/KeyboardShortcutsDialog.tsx": {
         "errors": 0,

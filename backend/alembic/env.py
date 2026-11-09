@@ -3,11 +3,13 @@ Alembic environment configuration
 """
 
 import os
+import re
 import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import JSON, engine_from_config, pool
+from sqlalchemy.dialects.postgresql import JSONB
 
 # Add the src directory to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -71,14 +73,138 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def include_object(obj, name, type_, reflected, compare_to):
-    """Leave migration-owned tables (not on Base.metadata) out of autogenerate.
+_JSON_DEFAULT_CAST_RE = re.compile(r"::jsonb?$")
 
-    ``document_embeddings`` needs the pgvector extension, so only
-    ``jd01_document_embeddings`` creates it; without this the reflected table
-    would be reported as "removed" by ``alembic check``.
+
+def _normalize_json_default(value):
+    if value is None:
+        return None
+    text = _JSON_DEFAULT_CAST_RE.sub("", str(value).strip())
+    return text.strip("'")
+
+
+# Columns declared with ``server_default="now()"`` (a Python str, not
+# ``func.now()``). SQLAlchemy renders that as DEFAULT 'now()', a string literal
+# that PostgreSQL folds into a constant when the table is created, so every
+# row defaults to the table's creation time rather than its insert time. The
+# migrated schema matches the models (r6h3_model_baseline creates these tables
+# from them), but Alembic compares the default by evaluating 'now()' again at
+# check time, so the comparison can never be equal. Changing the default is a
+# schema change and needs its own migration; until then these four columns
+# are compared by declaration instead. The list is explicit so a new
+# server_default="now()" is still reported.
+FROZEN_NOW_DEFAULT_COLUMNS = frozenset(
+    {
+        ("encrypted_user_profiles", "created_at"),
+        ("encrypted_organization_profiles", "created_at"),
+        ("encryption_audit_logs", "created_at"),
+        ("entity_relationships", "created_at"),
+    }
+)
+
+_TIMESTAMPTZ_LITERAL_RE = re.compile(r"^'[^']*'::timestamp with time zone$")
+
+
+def _is_frozen_now_default(metadata_column, inspected_default) -> bool:
+    server_default = metadata_column.server_default
+    return (
+        (metadata_column.table.name, metadata_column.name) in FROZEN_NOW_DEFAULT_COLUMNS
+        and getattr(server_default, "arg", None) == "now()"
+        and inspected_default is not None
+        and bool(_TIMESTAMPTZ_LITERAL_RE.match(str(inspected_default).strip()))
+    )
+
+
+def compare_server_default(
+    context,
+    inspected_column,
+    metadata_column,
+    inspected_default,
+    metadata_default,
+    rendered_metadata_default,
+):
+    """Compare plain JSON server defaults textually.
+
+    Alembic's default comparison asks the server ``SELECT <reflected> =
+    <rendered>``. PostgreSQL has no ``=`` operator for ``json`` (only
+    ``jsonb``), so a JSON column with a server default
+    (integration_context_selections.skill_version_ids, ``'[]'::json``)
+    crashed ``alembic check`` with "operator does not exist: json = unknown",
+    and the drift check silently stopped checking anything. Compare the
+    normalized default text for plain JSON; everything else (JSONB included)
+    keeps Alembic's own comparison (``None``).
+
+    The FROZEN_NOW_DEFAULT_COLUMNS above count as equal while the model still
+    declares the string "now()" and the database holds the constant it folded
+    to; any other change to those columns' defaults is still reported.
     """
-    return not (type_ == "table" and name in MIGRATION_OWNED_TABLES)
+    if _is_frozen_now_default(metadata_column, inspected_default):
+        return False
+    column_type = metadata_column.type
+    if isinstance(column_type, JSON) and not isinstance(column_type, JSONB):
+        return _normalize_json_default(inspected_default) != _normalize_json_default(
+            rendered_metadata_default
+        )
+    return None
+
+
+# --- Migration-owned schema objects ----------------------------------------
+# Objects that only an Alembic revision creates and that are deliberately NOT
+# declared on Base.metadata, mapped to the revision that owns them. The
+# ``alembic check`` drift gate skips them; everything else the migrations
+# build must be declared on the models. Extends the MIGRATION_OWNED_TABLES
+# convention of src/models/document_embedding.py. Never "fix" one of these
+# by writing a migration that drops it: they are live schema.
+
+MIGRATION_OWNED_TABLE_REVISIONS = {
+    # Needs pgvector; lives on its own declarative base (see
+    # src/models/document_embedding.py).
+    **{table: "jd01_document_embeddings" for table in MIGRATION_OWNED_TABLES},
+    # Core Table in src/services/agent/memory_store.py, not on Base.metadata.
+    "agent_memories": "m8o1p2q3r4s5",
+    # Operational state; its model (src/services/do_kb/backfill_model.py) is
+    # kept out of the global model registry on purpose.
+    "do_kb_backfill_progress": "r6x7y8z9a0b1",
+    # Its model (src/models/search_analytics.py) is not registered with
+    # src.models and disagrees with the migration (GUID vs CHAR(36) ids, no
+    # server defaults), so registering it would itself be reported as drift.
+    "search_analytics": "b8f3a1c2d4e5",
+}
+
+MIGRATION_OWNED_COLUMN_REVISIONS = {
+    # Trigger-maintained tsvector columns (update_thread_search_vector() /
+    # update_chat_message_search_vector()); repaired by
+    # sv01_search_vector_repair. Not mapped on the models.
+    ("threads", "search_vector"): "b2c3d4e5f6g7",
+    ("chat_messages", "search_vector"): "b2c3d4e5f6g7",
+}
+
+MIGRATION_OWNED_INDEX_REVISIONS = {
+    # GIN indexes on the unmapped search_vector columns above.
+    "idx_threads_search_vector": "b2c3d4e5f6g7",
+    "idx_chat_messages_search_vector": "b2c3d4e5f6g7",
+    # to_tsvector('english', COALESCE(...)) expression GIN indexes; also
+    # repaired by sv01_search_vector_repair.
+    "idx_threads_title_gin": "b2c3d4e5f6g7",
+    "idx_chat_messages_content_gin": "b2c3d4e5f6g7",
+    "idx_citations_snippet_gin": "b2c3d4e5f6g7",
+}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    """Leave migration-owned objects (not on Base.metadata) out of autogenerate.
+
+    See the MIGRATION_OWNED_*_REVISIONS maps above. Without this the reflected
+    objects would be reported as "removed" by ``alembic check``. Columns are
+    keyed by table, so a same-named column elsewhere is still compared.
+    """
+    if type_ == "table":
+        return name not in MIGRATION_OWNED_TABLE_REVISIONS
+    if type_ == "column":
+        return (obj.table.name, name) not in MIGRATION_OWNED_COLUMN_REVISIONS
+    if type_ == "index":
+        return name not in MIGRATION_OWNED_INDEX_REVISIONS
+    return True
 
 
 # other values from the config, defined by the needs of env.py,
@@ -295,7 +421,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        compare_server_default=True,
+        compare_server_default=compare_server_default,
     )
 
     with context.begin_transaction():
@@ -325,7 +451,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             include_object=include_object,
             compare_type=True,
-            compare_server_default=True,
+            compare_server_default=compare_server_default,
         )
 
         with context.begin_transaction():

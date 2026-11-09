@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy import Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 
@@ -105,6 +105,18 @@ class StanceClassificationModel(SQLBaseModel):
             "model_version",
             "organization_id",
             name="uq_stance_classifications_org_claim_src_model",
+        ),
+        # The same key as a unique index, created by add_org_id_stance_class
+        # (add_org_id_to_stance_classifications) for databases that predate the
+        # constraint. Redundant with the constraint, but every migrated
+        # database has both.
+        Index(
+            "ux_stance_classifications_org_claim_src_model",
+            "claim_hash",
+            "source_id",
+            "model_version",
+            "organization_id",
+            unique=True,
         ),
         {"extend_existing": True},
     )

@@ -17,7 +17,6 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 import redis.asyncio as redis
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect, status
-from jose import JWTError, jwt
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -320,61 +319,6 @@ class EnhancedConnectionManager(BaseService):
         await super().shutdown()
         logger.info("WebSocket Connection Manager shutdown complete")
 
-    async def authenticate_websocket(
-        self, websocket: WebSocket, token: str
-    ) -> Optional[Dict[str, Any]]:
-        """Authenticate WebSocket connection using JWT token.
-
-        On auth failure, accepts the WebSocket before closing it to ensure
-        proper protocol ordering (close frame requires an accepted connection).
-        """
-
-        async def _reject(code: int, reason: str) -> None:
-            """Accept then immediately close to avoid connection leak."""
-            try:
-                await websocket.accept()
-            except Exception:
-                pass  # Already accepted or connection lost
-            try:
-                await websocket.close(code=code, reason=reason)
-            except Exception:
-                pass  # Best-effort close
-
-        try:
-            if not token:
-                await _reject(
-                    status.WS_1008_POLICY_VIOLATION,
-                    "Authentication token required",
-                )
-                return None
-
-            # Decode JWT token
-            payload = jwt.decode(
-                token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
-            )
-
-            user_id = payload.get("sub")
-            organization_id = payload.get("organization_id")
-
-            if not user_id or not organization_id:
-                await _reject(status.WS_1008_POLICY_VIOLATION, "Invalid token payload")
-                return None
-
-            return {
-                "user_id": user_id,
-                "organization_id": organization_id,
-                "token_payload": payload,
-            }
-
-        except JWTError as e:
-            logger.warning(f"JWT authentication failed: {e}")
-            await _reject(status.WS_1008_POLICY_VIOLATION, "Invalid or expired token")
-            return None
-        except Exception as e:
-            logger.error(f"WebSocket authentication error: {e}")
-            await _reject(status.WS_1011_INTERNAL_ERROR, "Authentication error")
-            return None
-
     async def _connect_internal(
         self,
         websocket: WebSocket,
@@ -482,44 +426,6 @@ class EnhancedConnectionManager(BaseService):
             await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason=reason)
         except Exception:
             pass
-
-    async def connect(
-        self, websocket: WebSocket, token: str, client_info: Dict[str, Any] = None
-    ) -> Optional[str]:
-        """Accept and manage new WebSocket connection with token authentication"""
-        # Authenticate connection
-        auth_result = await self.authenticate_websocket(websocket, token)
-        if not auth_result:
-            return None
-
-        # Check connection limits — accept then close to avoid connection leak
-        if len(self.active_connections) >= self.max_connections:
-            await self._reject_connection(websocket, "Server at maximum capacity")
-            return None
-
-        # Per-user cap — one principal must not exhaust the global budget.
-        if self._user_at_capacity(auth_result["user_id"]):
-            logger.warning(
-                "WebSocket per-user connection limit reached for user %s (limit=%s)",
-                auth_result["user_id"],
-                self.max_connections_per_user,
-            )
-            await self._reject_connection(
-                websocket, "Per-user connection limit reached"
-            )
-            return None
-
-        # Accept connection
-        await websocket.accept()
-
-        # Delegate to internal helper
-        return await self._connect_internal(
-            websocket=websocket,
-            user_id=auth_result["user_id"],
-            organization_id=auth_result["organization_id"],
-            client_info=client_info,
-            auth_method=None,
-        )
 
     async def connect_authenticated(
         self,

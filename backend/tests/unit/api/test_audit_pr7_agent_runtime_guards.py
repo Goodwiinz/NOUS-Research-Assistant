@@ -133,7 +133,8 @@ def test_extraction_offloaded_to_background_task() -> None:
     tasks = _read("src/tasks/research_tasks.py")
     assert "run_extraction_matrix.apply_async(" in src
     assert 'name="src.tasks.research_tasks.run_extraction_matrix"' in tasks
-    assert "asyncio.run(" in tasks
+    # Runs the coroutine on the shared per-process worker loop.
+    assert "run_async(" in tasks
     assert "run_background_extraction" in tasks
     assert "Maximum 10 documents per extraction batch" in src
 

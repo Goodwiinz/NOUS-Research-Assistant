@@ -42,10 +42,12 @@ async def test_explicit_arxiv_search_emits_tool_call_without_llm(monkeypatch):
     assert len(message.tool_calls) == 1
     tool_call = message.tool_calls[0]
     assert tool_call["name"] == "search_arxiv"
+    # No explicit recency_days: the tool's default 12-month window applies and
+    # may widen to all time when it is empty, so a title lookup for an older
+    # paper is not reported as "no papers matched".
     assert tool_call["args"] == {
         "query": "retrieval-augmented generation papers",
         "max_results": 5,
-        "recency_days": 365,
     }
     assert tool_call["id"].startswith("direct_search_arxiv_")
     assert tool_call["type"] == "tool_call"
