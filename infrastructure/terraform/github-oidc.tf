@@ -44,7 +44,7 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
+        "repo:goodwiins@7139354/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
       ]
     }
   }
@@ -71,8 +71,8 @@ data "aws_iam_policy_document" "github_ecr_oidc_assume_role" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
-        "repo:Goodwiinz@234833987/NOUS-Research-Assistant@1073120335:ref:refs/heads/migration/aws",
+        "repo:goodwiins@7139354/NOUS-Research-Assistant@1073120335:ref:refs/heads/develop",
+        "repo:goodwiins@7139354/NOUS-Research-Assistant@1073120335:ref:refs/heads/migration/aws",
       ]
     }
   }
@@ -127,7 +127,7 @@ resource "aws_iam_role_policy" "github_ecr_push" {
 # Deploy jobs (staging/production/rollback) talk to EKS (update-kubeconfig,
 # kubectl, helm) and never touch ECR, so they assume this dedicated role.
 # It uses the same OIDC provider as ECR but trusts only the ID-qualified
-# Goodwiinz/NOUS-Research-Assistant develop subject; migration/aws is ECR-only.
+# goodwiins/NOUS-Research-Assistant develop subject; migration/aws is ECR-only.
 # NOTE: kubelet-side image pulls use the node instance role, not this role.
 # IMPORTANT: for the cluster to authorize these calls, this role's ARN must
 # ALSO be listed in `cluster_admin_role_arns` (terraform.tfvars) at apply
