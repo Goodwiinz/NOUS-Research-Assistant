@@ -1,7 +1,7 @@
 """Give frozen created_at/assigned_at columns a real DEFAULT now().
 
 Revision ID: cd01_created_at_default_now
-Revises: pb01_pdf_message_branches
+Revises: mh01_machine_handoff
 
 These columns were declared ``server_default="now()"`` (a Python str). SQLAlchemy
 renders a str as a quoted literal, ``DEFAULT 'now()'``, and PostgreSQL folds that
@@ -29,7 +29,7 @@ import alembic.op as op
 import sqlalchemy as sa
 
 revision = "cd01_created_at_default_now"
-down_revision = "pb01_pdf_message_branches"
+down_revision = "mh01_machine_handoff"
 branch_labels = None
 depends_on = None
 
