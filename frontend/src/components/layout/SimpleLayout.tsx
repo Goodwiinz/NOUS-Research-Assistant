@@ -1,48 +1,81 @@
 'use client';
 
-import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
-import {
-    BarChart3,
-    Book,
-    Bot,
-    ChevronDown,
-    Database,
-    FileText,
-    Home,
-    LogOut,
-    Search,
-    Settings,
-    Terminal
-} from 'lucide-react';
+import { ChevronDown, LogOut, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 
 interface SimpleLayoutProps {
   children: ReactNode;
   showHeader?: boolean;
 }
 
-// Terminal Observatory Theme
+const UI = { fontFamily: 'var(--nous-font-ui)' } as const;
 
-export function SimpleLayout({ children, showHeader = true }: SimpleLayoutProps) {
+// House focus ring (HeroSection). Theme tokens rather than the landing's fixed
+// erebus/selene, because this shell follows the app theme.
+const RING =
+  'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50';
+const RING_OFFSET = `${RING} focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-bg-1)`;
+
+const PUBLIC_NAV = [
+  { href: '/', label: 'Home' },
+  { href: '/arxiv', label: 'arXiv' },
+] as const;
+
+// Signed-in only: for a signed-out visitor each of these is a redirect to
+// the sign-in page.
+const GATED_NAV = [
+  { href: '/search', label: 'Search' },
+  { href: '/chat', label: 'Chat' },
+  { href: '/documents/upload', label: 'Documents' },
+  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/analytics', label: 'Analytics' },
+] as const;
+
+const MENU_ITEM = cn(
+  'flex w-full items-center gap-2 px-3 py-2 text-sm text-(--nous-fg-2) transition-colors hover:bg-(--nous-bg-3) hover:text-(--nous-fg-1)',
+  RING
+);
+
+/**
+ * Shell for signed-out visitors on public routes (app/(public)/layout.tsx).
+ * Signed-in users get the dashboard shell instead, so the gated links and the
+ * user menu here only show if the client session resolves after the server
+ * check.
+ */
+export function SimpleLayout({
+  children,
+  showHeader = true,
+}: SimpleLayoutProps): ReactElement {
   const { user, isAuthenticated, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
 
-  const handleLogout = () => {
+  const handleLogout = (): void => {
     logout();
     router.push('/login');
   };
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+    const handleClickOutside = (event: MouseEvent): void => {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
         setUserMenuOpen(false);
       }
     };
@@ -50,187 +83,157 @@ export function SimpleLayout({ children, showHeader = true }: SimpleLayoutProps)
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const navItems = [
-    { href: '/', label: 'Home', icon: Home },
-    { href: '/search', label: 'Search', icon: Search },
-    { href: '/chat', label: 'Chat', icon: Bot },
-    { href: '/documents/upload', label: 'Documents', icon: FileText },
-    { href: '/arxiv', label: 'ArXiv', icon: Database },
-    { href: '/dashboard', label: 'Dashboard', icon: BarChart3 },
-  ];
-
-  const getInitials = (email: string | undefined) => {
-    if (!email) return 'U';
-    const name = email.split('@')[0];
-    return name.slice(0, 2).toUpperCase();
-  };
-
   if (!showHeader) {
     return <>{children}</>;
   }
 
+  const navItems = isAuthenticated ? [...PUBLIC_NAV, ...GATED_NAV] : PUBLIC_NAV;
+  const isCurrent = (href: string): boolean =>
+    href === '/'
+      ? pathname === '/'
+      : pathname === href || (pathname?.startsWith(`${href}/`) ?? false);
+
   return (
-    <div className="min-h-screen bg-background">
-      {/* Terminal Observatory Header */}
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/80">
-        <div className="flex h-14 items-center justify-between px-4">
-          {/* Logo/Brand */}
-          <div className="flex items-center gap-6">
-            <Link href="/" className="flex items-center gap-3 group">
-              <div className="flex items-center justify-center w-8 h-8 rounded border border-primary/30 bg-primary/10 group-hover:border-primary/50 group-hover:bg-primary/20 transition-all">
-                <Terminal className="w-4 h-4 text-primary" />
-              </div>
-              <div className="hidden sm:block">
-                <h1 className="text-sm font-mono font-medium text-white/90 group-hover:text-primary transition-colors">
-                  RAG System
-                </h1>
-                <p className="text-[10px] font-mono text-white/40">Terminal Observatory</p>
-              </div>
-            </Link>
+    <div className="min-h-screen bg-(--nous-bg-1) text-(--nous-fg-1)">
+      <a
+        href="#main-content"
+        className={cn(
+          'sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-60 focus:rounded-(--nous-radius-md) focus:bg-(--nous-fg-1) focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-(--nous-bg-1)',
+          RING_OFFSET
+        )}
+        style={UI}
+      >
+        Skip to main content
+      </a>
 
-            {/* Navigation */}
-            <nav className="hidden md:flex items-center gap-1">
-              {navItems.map((item) => {
-                const isActive = pathname === item.href ||
-                  (item.href !== '/' && pathname?.startsWith(item.href));
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono transition-all",
-                      isActive
-                        ? "text-primary bg-primary/10 border border-primary/30"
-                        : "text-white/50 hover:text-white/80 hover:bg-white/5"
-                    )}
-                  >
-                    <item.icon className="w-3.5 h-3.5" />
-                    <span className="hidden lg:inline">{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
-          </div>
+      <header
+        className="sticky top-0 z-50 border-b border-(--nous-border-1) bg-(--nous-bg-1)"
+        style={UI}
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 min-h-14 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <Link
+            href="/"
+            className={cn('flex flex-col leading-none rounded-sm', RING)}
+          >
+            <span className="text-[15px] lg:text-base font-bold tracking-[0.18em] text-(--nous-fg-1)">
+              NOUS
+            </span>
+            <span className="hidden sm:block text-[11px] tracking-[0.12em] text-(--nous-fg-2) mt-1">
+              Multimodal Intelligence
+            </span>
+          </Link>
 
-          {/* Right side */}
-          <div className="flex items-center gap-3">
-            {/* Quick Links */}
-            <div className="hidden lg:flex items-center gap-2">
-              <Link
-                href="/analytics"
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono text-white/40 hover:text-white/70 transition-colors"
-              >
-                <BarChart3 className="w-3 h-3" />
-                Analytics
-              </Link>
-              <a
-                href="#"
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono text-white/40 hover:text-white/70 transition-colors"
-              >
-                <Book className="w-3 h-3" />
-                Docs
-              </a>
-            </div>
+          <nav
+            aria-label="Main"
+            className="flex flex-wrap items-center gap-x-4 sm:gap-x-6 gap-y-2 text-sm"
+          >
+            {navItems.map((item) => {
+              const current = isCurrent(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={current ? 'page' : undefined}
+                  className={cn(
+                    'inline-flex items-center min-h-9 rounded-sm transition-colors',
+                    current
+                      ? 'font-medium text-(--nous-fg-1) underline decoration-(--nous-sol) decoration-2 underline-offset-[6px]'
+                      : 'text-(--nous-fg-2) hover:text-(--nous-fg-1)',
+                    RING
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
 
-            {/* Divider */}
-            <div className="hidden lg:block w-px h-6 bg-white/10" />
-
-            {/* User menu */}
             {isAuthenticated ? (
               <div className="relative" ref={userMenuRef}>
                 <button
+                  type="button"
+                  aria-label="Account menu"
+                  aria-haspopup="true"
+                  aria-expanded={userMenuOpen}
+                  aria-controls={userMenuOpen ? menuId : undefined}
                   onClick={() => setUserMenuOpen(!userMenuOpen)}
                   className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 rounded border transition-all",
-                    userMenuOpen
-                      ? "border-primary/40 bg-primary/10"
-                      : "border-white/10 bg-white/2 hover:border-white/20"
+                    'inline-flex h-9 items-center gap-2 rounded-(--nous-radius-md) border border-(--nous-border-2) px-2.5 text-(--nous-fg-1) transition-colors hover:bg-(--nous-bg-3)',
+                    RING
                   )}
                 >
-                  <div className="w-6 h-6 rounded bg-linear-to-br from-primary/20 to-primary/10 border border-primary/30 flex items-center justify-center">
-                    <span className="text-[10px] font-mono font-medium text-primary">
-                      {getInitials(user?.email)}
-                    </span>
-                  </div>
-                  <div className="hidden sm:block text-left">
-                    <p className="text-xs font-mono text-white/80 leading-none">
-                      {user?.email?.split('@')[0] || 'User'}
-                    </p>
-                    <p className="text-[10px] font-mono text-white/40 leading-none mt-0.5">
-                      Admin
-                    </p>
-                  </div>
-                  <ChevronDown className={cn(
-                    "w-3 h-3 text-white/40 transition-transform",
-                    userMenuOpen && "rotate-180"
-                  )} />
+                  <span className="max-w-[16ch] truncate text-sm">
+                    {user?.email?.split('@')[0] || 'Account'}
+                  </span>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={cn(
+                      'h-3.5 w-3.5 text-(--nous-fg-2) transition-transform',
+                      userMenuOpen && 'rotate-180'
+                    )}
+                  />
                 </button>
 
-                {/* Dropdown */}
                 {userMenuOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-48 rounded border border-white/10 bg-card shadow-xl shadow-black/50 overflow-hidden">
-                    {/* User info */}
-                    <div className="px-3 py-2 border-b border-white/10 bg-white/2">
-                      <p className="text-xs font-mono text-white/80">{user?.email}</p>
-                      <p className="text-[10px] font-mono text-primary">Administrator</p>
-                    </div>
-
-                    {/* Menu items */}
+                  <div
+                    id={menuId}
+                    className="absolute right-0 top-full mt-2 w-56 overflow-hidden rounded-(--nous-radius-md) border border-(--nous-border-1) bg-(--nous-bg-2) shadow-(--nous-shadow-lg)"
+                  >
+                    <p className="truncate border-b border-(--nous-border-1) px-3 py-2 text-xs text-(--nous-fg-2)">
+                      {user?.email}
+                    </p>
                     <div className="py-1">
                       <Link
                         href="/settings"
                         onClick={() => setUserMenuOpen(false)}
-                        className="flex items-center gap-2 px-3 py-2 text-xs font-mono text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                        className={MENU_ITEM}
                       >
-                        <Settings className="w-3.5 h-3.5" />
+                        <Settings aria-hidden="true" className="h-4 w-4" />
                         Settings
                       </Link>
-                      <Link
-                        href="/analytics"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="flex items-center gap-2 px-3 py-2 text-xs font-mono text-white/60 hover:text-white hover:bg-white/5 transition-colors"
-                      >
-                        <BarChart3 className="w-3.5 h-3.5" />
-                        Analytics
-                      </Link>
                     </div>
-
-                    {/* Logout */}
-                    <div className="border-t border-white/10 py-1">
+                    <div className="border-t border-(--nous-border-1) py-1">
                       <button
+                        type="button"
                         onClick={() => {
                           setUserMenuOpen(false);
                           handleLogout();
                         }}
-                        className="flex items-center gap-2 w-full px-3 py-2 text-xs font-mono text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+                        className={MENU_ITEM}
                       >
-                        <LogOut className="w-3.5 h-3.5" />
-                        Sign Out
+                        <LogOut aria-hidden="true" className="h-4 w-4" />
+                        Sign out
                       </button>
                     </div>
                   </div>
                 )}
               </div>
             ) : (
-              <Link href="/login">
-                <Button
-                  size="sm"
+              <>
+                <Link
+                  href="/login"
                   className={cn(
-                    "h-8 px-4 font-mono text-xs",
-                    "bg-primary/10 text-primary border border-primary/30",
-                    "hover:bg-primary/20 hover:border-primary/50"
+                    'inline-flex items-center min-h-9 rounded-sm text-(--nous-fg-2) hover:text-(--nous-fg-1) transition-colors',
+                    RING
                   )}
                 >
-                  Sign In
-                </Button>
-              </Link>
+                  Sign in
+                </Link>
+                <Link
+                  href="/register"
+                  className={cn(
+                    'inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-fg-1) text-(--nous-bg-1) transition-opacity hover:opacity-90',
+                    RING_OFFSET
+                  )}
+                >
+                  Get started
+                </Link>
+              </>
             )}
-          </div>
+          </nav>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1">
+      <main id="main-content" className="flex-1">
         {children}
       </main>
     </div>

@@ -36,6 +36,16 @@ const DESKTOP_WASH: Record<AuthScenePanelProps['wash'], string> = {
 const MOBILE_WASH =
   'linear-gradient(to top, rgba(var(--nous-nyx-rgb),0.97) 0%, rgba(var(--nous-nyx-rgb),0.85) 45%, rgba(var(--nous-nyx-rgb),0.35) 80%, rgba(var(--nous-nyx-rgb),0.2) 100%)';
 
+// Top-edge wash behind the wordmark and tagline, at both breakpoints and in
+// both wash modes (the 'light' desktop wash and the mobile wash fade out
+// toward the top, leaving the wordmark on bright shelves). It holds 0.85 Nyx
+// through the wordmark block (which ends ~56px down), so even over a pure
+// white pixel ivory measures 10.7:1 and parchment 6.6:1, then eases out over
+// the next 100px (several stops, so it reads as shade under the ceiling rather
+// than a band laid across the artwork) and the illustration keeps its light.
+const TOP_WASH =
+  'linear-gradient(to bottom, rgba(var(--nous-nyx-rgb),0.85) 0px, rgba(var(--nous-nyx-rgb),0.85) 60px, rgba(var(--nous-nyx-rgb),0.55) 88px, rgba(var(--nous-nyx-rgb),0.25) 120px, rgba(var(--nous-nyx-rgb),0) 160px)';
+
 export default function AuthScenePanel({
   src,
   headline,
@@ -66,6 +76,12 @@ export default function AuthScenePanel({
         aria-hidden="true"
         className="absolute inset-0 hidden lg:block"
         style={{ background: DESKTOP_WASH[wash] }}
+      />
+      <div
+        aria-hidden="true"
+        data-wash="top"
+        className="absolute inset-x-0 top-0 h-40"
+        style={{ background: TOP_WASH }}
       />
 
       <div className="absolute left-5 top-5 flex flex-col leading-none lg:left-16 lg:top-6">

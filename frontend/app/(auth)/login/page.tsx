@@ -40,11 +40,11 @@ const SCENE = {
 const SceneBody = (
   <>
     NOUS reads your documents the way a careful researcher would, and shows its
-    work
-    <sup className="ml-0.5 align-super text-[0.6em] font-semibold text-(--nous-helios)">
+    work.
+    <sup className="align-super text-[0.6em] font-semibold text-(--nous-helios)">
       1
-    </sup>
-    . Sign in to pick up where you left off.
+    </sup>{' '}
+    Sign in to pick up where you left off.
   </>
 );
 
@@ -171,7 +171,7 @@ function LoginPageContent(): React.JSX.Element | null {
     return (
       <div className="grid min-h-screen lg:grid-cols-2">
         {Scene}
-        <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+        <main className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
           <div className="w-full max-w-[440px] space-y-5">
             <h2
               className="text-[32px] font-normal tracking-[-0.02em] text-(--nous-erebus)"
@@ -183,7 +183,7 @@ function LoginPageContent(): React.JSX.Element | null {
             <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-bg-2)" />
             <div className="h-12 rounded-(--nous-radius-md) bg-(--nous-erebus)/10" />
           </div>
-        </div>
+        </main>
       </div>
     );
   }
@@ -192,8 +192,8 @@ function LoginPageContent(): React.JSX.Element | null {
     <div className="grid min-h-screen lg:grid-cols-2">
       {Scene}
 
-      {/* Right panel — sign-in form */}
-      <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+      {/* Right panel: sign-in form */}
+      <main className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
         <div className="w-full max-w-[440px]">
           <div className="flex flex-col gap-5">
             <div>
@@ -350,7 +350,7 @@ function LoginPageContent(): React.JSX.Element | null {
             </p>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
