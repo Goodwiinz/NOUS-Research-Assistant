@@ -119,12 +119,16 @@ def _to_lucene_prefix(query: str) -> str:
     return " ".join(tokens) if tokens else query
 
 
+# Cypher predicate for a call that arrived with no tenant scope at all (D2).
+UNSCOPED_MATCHES_NOTHING = "false"
+
+
 def _entity_scope_predicate(
     alias: str,
     source_document_ids: Optional[List[str]],
     organization_id: Optional[str],
     params: Dict[str, Any],
-) -> Optional[str]:
+) -> str:
     """Build the org-scoping WHERE predicate for an Entity alias (#50 read-flip).
 
     Prefers the indexed `organization_id` (stamped on writes + the one-time
@@ -134,7 +138,9 @@ def _entity_scope_predicate(
     arg can be dropped, leaving a pure indexed equality.
 
     Mutates `params` with whichever bind vars it uses. Returns the predicate (no
-    leading WHERE/AND), or None when unscoped (both inputs None).
+    leading WHERE/AND). With neither scope it returns ``"false"`` so the query
+    matches nothing (D2): every caller passes an org or a document list, so an
+    unscoped call is a dropped scope and must fail closed, not span tenants.
     Relationships have no organization_id, so this is entity-only.
     """
     preds: List[str] = []
@@ -145,13 +151,13 @@ def _entity_scope_predicate(
         preds.append(f"{alias}.source_document_id IN $source_document_ids")
         params["source_document_ids"] = source_document_ids
     if not preds:
-        # Both scopes None → unscoped, cross-tenant query. Callers should always
-        # pass an organization_id; warn loudly so a dropped scope is visible.
-        logger.warning(
+        # Both scopes None → a dropped tenant scope. Fail closed: match nothing
+        # rather than every organization's entities (D2).
+        logger.error(
             "_entity_scope_predicate called with no organization_id or "
-            "source_document_ids — query will span all organizations"
+            "source_document_ids — failing closed (query matches nothing)"
         )
-        return None
+        return UNSCOPED_MATCHES_NOTHING
     return "(" + " OR ".join(preds) + ")"
 
 
@@ -168,8 +174,8 @@ def _two_endpoint_scope(
     Org-exclusive precedence here used to make legacy NULL-org relationships
     listable (via the OR'ing sibling) but undeletable and untraversable.
 
-    Returns a fragment with a LEADING "\\n  AND ..." (empty when unscoped) plus
-    the bind params to merge in.
+    Returns a fragment with a LEADING "\\n  AND ..." plus the bind params to
+    merge in. With neither scope the fragment is ``AND false`` (fail closed).
     """
     preds: List[str] = []
     params: Dict[str, Any] = {}
@@ -186,16 +192,16 @@ def _two_endpoint_scope(
             f"\n  AND {joined.format(alias=alias_b)}"
         )
         return frag, params
-    # Neither scope supplied → the traversal spans EVERY organization's
-    # entities. Warn loudly (mirrors _entity_scope_predicate) so a dropped
-    # tenant scope on a path/neighborhood query is auditable, not silent.
-    logger.warning(
+    # Neither scope supplied → a dropped tenant scope. Fail closed (mirrors
+    # _entity_scope_predicate): the traversal matches nothing instead of
+    # spanning every organization's entities (#50, D2).
+    logger.error(
         "_two_endpoint_scope (%s/%s) called with no organization_id or "
-        "source_document_ids — traversal will span ALL organizations (#50)",
+        "source_document_ids — failing closed (traversal matches nothing)",
         alias_a,
         alias_b,
     )
-    return "", {}
+    return f"\n  AND {UNSCOPED_MATCHES_NOTHING}", {}
 
 
 def _entity_document_ids_expr(alias: str) -> str:

@@ -26,8 +26,8 @@ def test_entity_scope_predicate_scopes_on_org_alone() -> None:
     assert "e.organization_id = $organization_id" in pred
     assert params["organization_id"] == "org-123"
 
-    # Both None → explicitly unscoped (the branch callers must never hit).
-    assert _entity_scope_predicate("e", None, None, {}) is None
+    # Both None → a dropped scope fails closed (D2): it matches nothing.
+    assert _entity_scope_predicate("e", None, None, {}) == "false"
 
 
 @pytest.mark.unit
