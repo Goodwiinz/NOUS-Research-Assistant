@@ -23,7 +23,6 @@ from src.schemas.chat import (  # Thread schemas; Bulk thread schemas; Message s
     BulkThreadRequest,
     BulkThreadResponse,
     BulkThreadResult,
-    ChatMessageCreate,
     ChatMessageListResponse,
     ChatMessageResponse,
     ChatMessageUpdate,
@@ -739,75 +738,6 @@ async def get_thread_context(
 # =============================================================================
 # Message Endpoints
 # =============================================================================
-
-
-@router.post(
-    "/{thread_id}/messages",
-    response_model=ChatMessageResponse,
-    status_code=status.HTTP_201_CREATED,
-    deprecated=True,
-)
-async def create_message(
-    thread_id: UUID,
-    data: ChatMessageCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    [DEPRECATED] Create a new message in a thread.
-
-    Audit finding C4: three public POST create-message routes coexist but only
-    the flat ``POST /api/v2/messages`` (``create_message_standalone`` in
-    ``api/threads/workspaces.py``) is called by any client — it is the
-    canonical route. This nested variant has no live callers (frontend, CLI,
-    scripts, or synthetic traffic) and is kept only for a deprecation window.
-    New clients MUST use ``POST /api/v2/messages`` with ``thread_id`` in the
-    body. Slated for removal in a follow-up cleanup PR once the window closes.
-
-    See ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible
-    date and criteria.
-    """
-    # Ensure thread_id matches
-    if data.thread_id != thread_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Thread ID in path must match thread_id in body",
-        )
-
-    service = get_chat_service(db)
-    message = await service.create_message(data, current_user.id)
-
-    if not message:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Thread not found or insufficient permissions",
-        )
-
-    # Broadcast message creation event via WebSocket
-    try:
-        thread = await service.get_thread(thread_id, current_user.id)
-        if thread:
-            await thread_event_service.broadcast_message_created(
-                message_id=str(message.id),
-                thread_id=str(thread_id),
-                conversation_id=str(thread.conversation_id),
-                user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
-                role=(
-                    message.role.value
-                    if hasattr(message.role, "value")
-                    else str(message.role)
-                ),
-                content_preview=message.content[:100] if message.content else None,
-                has_citations=bool(message.citations),
-            )
-    except Exception as e:
-        logger.error(f"Failed to broadcast message_created event: {e}")
-
-    return _format_message_response(
-        message,
-        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
-    )
 
 
 @router.get("/{thread_id}/messages", response_model=ChatMessageListResponse)

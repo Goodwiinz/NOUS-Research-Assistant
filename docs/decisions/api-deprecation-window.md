@@ -50,6 +50,16 @@ No route behavior changes in this PR — this is a paper trail for a
 `deprecated=True` marking already in place; it fixes only the _process_ gap
 (no recorded deletion criteria/date) that PR #1123's audit plan flagged.
 
+## Outcome (2026-11-10)
+
+Deletion criteria re-verified on `develop` at fecb5fdd8: no frontend, CLI,
+script, QA or synthetic-traffic source POSTs to either nested route (the
+frontend's `workspaceService.createMessage` uses `POST /api/v2/messages`; QA
+scenarios only GET the nested list paths). Both nested POST handlers were
+removed (audit C4). `stream.py` had already been deleted (bfeb8b89a). The GET
+list routes on the same paths are unchanged, so a stale client now receives
+405 instead of creating a message.
+
 ## Rollback
 
 Purely additive (one new doc + three docstring one-liners). Revert by
