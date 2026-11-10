@@ -5,6 +5,7 @@ import { getAppQueryClient } from '@/lib/query-client';
 import type {
   AgentErrorCategory,
   AgentExecuteRequest,
+  AgentStreamCallbacks,
 } from '@/services/agentChatService';
 import type {
   AgentChatState,
@@ -14,6 +15,54 @@ import type {
   PageContext,
   ToolExecution,
 } from '@/types/agent-chat';
+
+// Callbacks that fire without the backend having accepted the run: auth
+// retries happen before the request lands, and onError covers HTTP-level
+// rejections that never created a run.
+const NON_ACCEPTANCE_CALLBACKS = new Set<string>([
+  'onError',
+  'onAuthRefreshAttempt',
+  'onAuthRefreshSuccess',
+  'onConnectionLost',
+]);
+// Frames the backend sends as soon as it accepts a run, before any token.
+const ACCEPTANCE_FRAME_CALLBACKS = [
+  'onRunId',
+  'onStreamId',
+  'onSeq',
+  'onStatus',
+  'onHeartbeat',
+] as const;
+
+/**
+ * A4-AG3: wrap stream callbacks so `onAccepted` fires on the first frame
+ * the backend sent for this run. Once a run is accepted, a dropped SSE
+ * transport must not start a second durable run from the same payload:
+ * the first run is still executing server-side.
+ */
+export function trackStreamAcceptance(
+  callbacks: AgentStreamCallbacks,
+  onAccepted: () => void
+): AgentStreamCallbacks {
+  const wrapped: Record<string, unknown> = { ...callbacks };
+  for (const key of ACCEPTANCE_FRAME_CALLBACKS) {
+    if (typeof wrapped[key] !== 'function') wrapped[key] = () => {};
+  }
+  for (const [key, value] of Object.entries(wrapped)) {
+    if (typeof value !== 'function' || NON_ACCEPTANCE_CALLBACKS.has(key)) {
+      continue;
+    }
+    const fn = value as (...args: unknown[]) => unknown;
+    wrapped[key] = (...args: unknown[]) => {
+      onAccepted();
+      return fn(...args);
+    };
+  }
+  return wrapped as AgentStreamCallbacks;
+}
+
+export const STREAM_INTERRUPTED_NOTE =
+  'Connection interrupted — this answer may still finish. Reopen this chat to see it.';
 
 const DEFAULT_PAGE_CONTEXT: PageContext = {
   type: 'unknown',
@@ -244,11 +293,24 @@ export const useAgentChatStore = create<AgentChatStore>()(
         let didMutateProjectData = false;
         let mutatedProjectId: string | undefined;
 
-        // Build messages array for the API (only user/assistant roles)
+        // Build messages array for the API (only user/assistant roles).
+        // A4-AG3: the new turn carries a client_message_id so the backend
+        // dedupes transport retries of this exact submission (the Trigger
+        // task retries its POST /execute; /stream and /execute both key
+        // their idempotency on it).
+        const clientMessageId = crypto.randomUUID();
         const apiMessages: AgentExecuteRequest['messages'] =
           get().messages.flatMap((message) =>
             message.role === 'user' || message.role === 'assistant'
-              ? [{ role: message.role, content: message.content }]
+              ? [
+                  message.id === userMessage.id
+                    ? {
+                        role: message.role,
+                        content: message.content,
+                        client_message_id: clientMessageId,
+                      }
+                    : { role: message.role, content: message.content },
+                ]
               : []
           );
 
@@ -275,6 +337,22 @@ export const useAgentChatStore = create<AgentChatStore>()(
         // either way. Declared outside the inner try so the catch (a
         // sibling block, not a child of try) can still see it.
         let sawConfirmationFrame = false;
+        // A4-AG3: set by the first backend frame of this run. After it, the
+        // run exists server-side and a durable fallback would execute the
+        // same turn a second time (a separate idempotency namespace).
+        let sseAccepted = false;
+        const streamMessage = (
+          payload: AgentExecuteRequest,
+          callbacks: AgentStreamCallbacks,
+          signal: AbortSignal
+        ): Promise<void> =>
+          agentChatService.streamMessage(
+            payload,
+            trackStreamAcceptance(callbacks, () => {
+              sseAccepted = true;
+            }),
+            signal
+          );
         if (useStreaming) {
           set((state) => {
             state.messages.push({
@@ -298,7 +376,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             const isCurrentGeneration = (): boolean =>
               (get() as unknown as AgentChatStore)._abortController ===
               abortController;
-            await agentChatService.streamMessage(
+            await streamMessage(
               requestPayload,
               {
                 onTrace: (threadId: string) => {
@@ -575,7 +653,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             // untouched here (onConfirmation already populated it) and stays
             // fully usable — confirming is a separate request from this
             // dead stream, not something this disconnect invalidates.
-            if (sawConfirmationFrame) {
+            if (sawConfirmationFrame || sseAccepted) {
               // Mirrors the outer catches' supersede guard (:701, :1275): a
               // stopGeneration/thread-switch that already aborted this
               // generation has its own reset in flight — don't clobber
@@ -586,8 +664,10 @@ export const useAgentChatStore = create<AgentChatStore>()(
                   (m) => m.id === placeholderId
                 );
                 if (idx !== -1) {
-                  state.messages[idx].content =
-                    'Connection interrupted — your confirmation is still pending below.';
+                  const partial = state.messages[idx].content;
+                  state.messages[idx].content = sawConfirmationFrame
+                    ? 'Connection interrupted — your confirmation is still pending below.'
+                    : `${partial ? `${partial}\n\n` : ''}${STREAM_INTERRUPTED_NOTE}`;
                   settleStreamingMessage(state.messages[idx]);
                 }
                 // Parity with the sibling onError path above: tool calls run
