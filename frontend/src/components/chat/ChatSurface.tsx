@@ -345,6 +345,10 @@ export function ChatSurface({
               className="absolute left-0 top-0 bottom-0 w-[min(280px,85vw)] bg-(--nous-bg-2) border-r border-(--nous-border-1) shadow-(--nous-shadow-lg) outline-hidden"
             >
               <ChatSidebar
+                // Fill the drawer panel. The sidebar's own fixed 260px left a
+                // strip of bare panel between the list and the scrim, and the
+                // panel already draws the right border.
+                className="w-full border-r-0"
                 conversations={conversations}
                 activeId={activeThreadId}
                 onSelect={onSelectThread}

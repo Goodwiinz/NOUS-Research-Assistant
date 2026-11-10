@@ -81,4 +81,26 @@ describe('SlashCommandMenu', () => {
     );
     expect(onHighlight).toHaveBeenCalledWith(1);
   });
+  it('caps width on sm and up and height at the smaller of the viewport budget and 22rem', () => {
+    render(
+      <SlashCommandMenu
+        open
+        commands={commands}
+        highlightedIndex={0}
+        onHighlight={vi.fn()}
+        onRun={vi.fn()}
+      />
+    );
+
+    const listbox = screen.getByRole('listbox');
+    // Full width on narrow screens; left-aligned and capped from sm up.
+    expect(listbox.className).toContain('left-0');
+    expect(listbox.className).toContain('right-0');
+    expect(listbox.className).toContain('sm:right-auto');
+    expect(listbox.className).toContain('sm:w-full');
+    expect(listbox.className).toContain('sm:max-w-[30rem]');
+    expect(listbox.style.maxHeight).toBe(
+      'min(var(--slash-menu-max-height, min(60dvh, calc(100dvh - 16px))), 22rem)'
+    );
+  });
 });

@@ -83,7 +83,39 @@ interface DateSection {
 
 const SIDEBAR_PREVIEW_MAX_CHARS = 60;
 
-function truncatePreview(content: string): string {
+/**
+ * Reduce a markdown message to the plain words a reader would see, so a row
+ * preview never shows `**`, backticks, fences or list markers.
+ */
+function markdownToPlainText(markdown: string): string {
+  return (
+    markdown
+      // Code fences: drop the fence lines, keep the code.
+      .replace(/^\s*(```|~~~)[^\n]*$/gm, '')
+      // Images and links: keep the visible text.
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      // Line-leading headings, blockquotes and list markers.
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+      .replace(/^\s*>+\s?/gm, '')
+      .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
+      // A summary with its newlines already collapsed leaves list markers
+      // mid-line ("I can run: - Terminal"). Only a marker that follows
+      // sentence punctuation counts, so "a - b" and "2 + 2" keep their sign.
+      .replace(/([:.;!?])\s+[-*+]\s+(?=\S)/g, '$1 ')
+      .replace(/(\*\*|__)(.+?)\1/g, '$2')
+      .replace(/\*(\S(?:.*?\S)?)\*/g, '$1')
+      // Underscore emphasis only at word edges, so snake_case survives.
+      .replace(/(^|\W)_(\S(?:.*?\S)?)_(?=\W|$)/g, '$1$2')
+      .replace(/~~(.+?)~~/g, '$1')
+      .replace(/`+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+}
+
+function truncatePreview(raw: string): string {
+  const content = markdownToPlainText(raw);
   return content.length > SIDEBAR_PREVIEW_MAX_CHARS
     ? `${content.substring(0, SIDEBAR_PREVIEW_MAX_CHARS)}…`
     : content;

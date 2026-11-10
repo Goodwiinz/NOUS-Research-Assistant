@@ -98,4 +98,34 @@ describe('CitationChips sources list', () => {
     expect(indexByKey.get('doc-1')).toBe(1);
     expect(indexByKey.get('doc-2')).toBe(2);
   });
+  it('renders backend <mark> highlights as real mark elements, not literal tags', () => {
+    const { container } = render(
+      <CitationChips
+        citations={[
+          {
+            documentId: 'doc-9',
+            title: 'Cedar Lantern field notes',
+            score: 0.8,
+            content:
+              'exactly seven <mark>sample</mark> <mark>sensors</mark>: Cedar-01 <b>x</b>',
+          },
+        ]}
+      />
+    );
+
+    const marks = container.querySelectorAll('mark');
+    expect(Array.from(marks).map((m) => m.textContent)).toEqual([
+      'sample',
+      'sensors',
+    ]);
+    expect(container.textContent).not.toContain('<mark>');
+    expect(container.textContent).not.toContain('</mark>');
+    // Any other tag stays inert text.
+    expect(container.textContent).toContain('<b>x</b>');
+    expect(container.querySelector('b')).toBeNull();
+    // The row's accessible name carries the plain passage.
+    expect(
+      screen.getByRole('button', { name: /exactly seven sample sensors/ })
+    ).toBeInTheDocument();
+  });
 });

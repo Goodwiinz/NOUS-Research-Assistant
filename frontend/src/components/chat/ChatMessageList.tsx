@@ -77,6 +77,10 @@ export const ChatMessageList = React.memo(function ChatMessageList({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  // True only when something new arrived while the user was scrolled away, so
+  // the jump pill never claims "New messages" for a plain scroll-up.
+  const [hasUnseenContent, setHasUnseenContent] = useState(false);
+  const prevStreamingLengthRef = useRef(storeStreamingContent?.length ?? 0);
   const prefersReducedMotion = useReducedMotion();
   const scrollRafRef = useRef<number | null>(null);
   const scheduledScrollThreadIdRef = useRef<string | null>(null);
@@ -141,6 +145,7 @@ export const ChatMessageList = React.memo(function ChatMessageList({
     scrollTickRef.current = false;
     loadOlderTriggeredRef.current = false;
     setShowScrollButton(false);
+    setHasUnseenContent(false);
   }, [activeThreadId]);
 
   // Throttled auto-scroll: at most one scrollIntoView per animation frame.
@@ -189,6 +194,25 @@ export const ChatMessageList = React.memo(function ChatMessageList({
     commandOutputs,
     showScrollButton,
   ]);
+
+  // Mark unseen content: an appended message the user did not send, or the
+  // streamed answer growing, while the view is away from the bottom. A
+  // prepended older page keeps the tail id, so it is not `isNewMessage`.
+  // Declared before the effect that advances the prev-message refs.
+  useEffect(() => {
+    const streamingLength = storeStreamingContent?.length ?? 0;
+    const streamGrew = streamingLength > prevStreamingLengthRef.current;
+    prevStreamingLengthRef.current = streamingLength;
+    if (!showScrollButton) return;
+    if ((isNewMessage && !isOwnNewMessage) || streamGrew) {
+      setHasUnseenContent(true);
+    }
+  }, [showScrollButton, isNewMessage, isOwnNewMessage, storeStreamingContent]);
+
+  // Back at the bottom (or the pill dismissed): nothing is unseen any more.
+  useEffect(() => {
+    if (!showScrollButton) setHasUnseenContent(false);
+  }, [showScrollButton]);
 
   useEffect(() => {
     return () => {
@@ -434,12 +458,18 @@ export const ChatMessageList = React.memo(function ChatMessageList({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.9 }}
               onClick={scrollToBottom}
-              aria-label="Scroll to newest messages"
+              aria-label={
+                hasUnseenContent
+                  ? 'New messages below, jump to latest'
+                  : 'Jump to latest message'
+              }
               className="flex items-center justify-center min-w-11 min-h-11 sm:w-auto sm:h-auto sm:gap-2 sm:px-4 sm:py-2 rounded-full bg-(--nous-sol) text-(--nous-erebus) text-xs font-semibold shadow-md hover:shadow-lg transition-all pointer-events-auto"
               style={{ fontFamily: 'var(--nous-font-ui)' }}
             >
               <ArrowDown className="w-4 h-4" />
-              <span className="hidden sm:inline">New messages</span>
+              <span className="hidden sm:inline">
+                {hasUnseenContent ? 'New messages' : 'Jump to latest'}
+              </span>
             </motion.button>
           </div>
         )}

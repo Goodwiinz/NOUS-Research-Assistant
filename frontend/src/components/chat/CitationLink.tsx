@@ -6,6 +6,7 @@ import {
   HoverCardTrigger,
 } from '@/components/ui/hover-card';
 import { cn } from '@/lib/utils';
+import { stripHighlightTags } from '@/utils/searchHighlight';
 import {
   Citation,
   isNavigableCitation,
@@ -28,7 +29,8 @@ interface CitationLinkProps {
   className?: string;
 }
 
-function cleanContentPreview(content: string): string {
+function cleanContentPreview(raw: string): string {
+  const content = stripHighlightTags(raw);
   const cleaned = content
     .replace(/^Title:\s*[^\n]+\n?/i, '')
     .replace(/^Authors?:\s*[^\n]+\n?/i, '')

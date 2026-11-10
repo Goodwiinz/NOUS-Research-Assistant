@@ -36,7 +36,11 @@ export function WelcomeState({ onPromptSelect }: WelcomeStateProps) {
   const reduceMotion = useReducedMotion();
 
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-6 py-16">
+    // Extra bottom padding (7rem, not the 4rem top) so the keyboard hint
+    // that closes this block scrolls fully clear of the composer below the
+    // scroll frame on short (~800px) viewports instead of being sliced at its
+    // edge.
+    <div className="flex min-h-full flex-col items-center justify-center px-6 pt-16 pb-28">
       <motion.div
         initial={reduceMotion ? false : { opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}

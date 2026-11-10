@@ -4,6 +4,7 @@ import React from 'react';
 import { Activity } from 'lucide-react';
 
 import type { Citation } from '@/utils/citationParser';
+import { parseHighlightedSnippet } from '@/utils/searchHighlight';
 
 export interface CitationChipsProps {
   citations: Citation[];
@@ -100,7 +101,23 @@ export function CitationChips({
                       className="mt-0.5 line-clamp-2 block text-[14px] leading-[1.5] text-(--nous-fg-2)"
                       style={{ fontFamily: 'var(--nous-font-body)' }}
                     >
-                      {`“…${citation.content}…”`}
+                      {'“…'}
+                      {parseHighlightedSnippet(citation.content).map(
+                        (segment, segmentIndex) =>
+                          segment.highlighted ? (
+                            <mark
+                              key={segmentIndex}
+                              className="rounded-[2px] bg-(--nous-helios-muted) px-px text-(--nous-fg-1)"
+                            >
+                              {segment.text}
+                            </mark>
+                          ) : (
+                            <React.Fragment key={segmentIndex}>
+                              {segment.text}
+                            </React.Fragment>
+                          )
+                      )}
+                      {'…”'}
                     </span>
                   )}
                 </span>

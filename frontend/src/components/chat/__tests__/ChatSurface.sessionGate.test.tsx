@@ -8,7 +8,7 @@
  * anyway. These tests FAIL against the old behavior.
  */
 
-import { render, fireEvent, screen } from '@testing-library/react';
+import { render, fireEvent, screen, within } from '@testing-library/react';
 import type { ComponentProps, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -86,7 +86,9 @@ vi.mock('@/components/chat/ChatHeader', () => ({
 }));
 
 vi.mock('@/components/chat/ChatSidebar', () => ({
-  ChatSidebar: () => <div data-testid="chat-sidebar" />,
+  ChatSidebar: (props: { className?: string }) => (
+    <div data-testid="chat-sidebar" data-class={props.className ?? ''} />
+  ),
 }));
 
 vi.mock('@/hooks/chat/useChatStreaming', () => ({
@@ -290,5 +292,21 @@ describe('ChatSurface session-interactivity gate', () => {
     expect(update(' ')).toBe(' ');
     expect(update('draft already here')).toBe('draft already here');
     textarea.remove();
+  });
+});
+
+describe('ChatSurface history drawer', () => {
+  it('lets the thread list fill the drawer panel so no panel strip shows beside it', () => {
+    // The panel is min(280px, 85vw) wide while the sidebar defaults to a fixed
+    // 260px with its own background, which left a 20px strip of bare panel
+    // between the list and the scrim.
+    const { props } = makeProps(makeSession());
+    props.drawer = { ...props.drawer, isOpen: true };
+
+    render(<ChatSurface {...props} />);
+
+    const drawer = screen.getByRole('dialog', { name: 'Chat history' });
+    const sidebar = within(drawer).getByTestId('chat-sidebar');
+    expect(sidebar.getAttribute('data-class')).toContain('w-full');
   });
 });

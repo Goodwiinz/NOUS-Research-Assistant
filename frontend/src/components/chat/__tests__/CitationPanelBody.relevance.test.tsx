@@ -115,4 +115,20 @@ describe('CitationPanelBody relevance meter', () => {
       'Source text unavailable.'
     );
   });
+  it('strips search-highlight mark tags from the passage and the filter', () => {
+    render(
+      <CitationPanelBody
+        citations={[
+          citation({ content: 'seven <mark>sample</mark> <MARK>sensors</MARK>' }),
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId('citation-source-text')).toHaveTextContent(
+      /^seven sample sensors$/
+    );
+    expect(screen.getByTestId('citation-source-text').textContent).not.toMatch(
+      /mark>/i
+    );
+  });
 });

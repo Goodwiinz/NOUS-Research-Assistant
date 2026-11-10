@@ -96,15 +96,17 @@ export function SlashCommandMenu({
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="absolute left-0 right-0 z-50 overflow-x-hidden overflow-y-auto rounded-xl p-1"
+          className="absolute left-0 right-0 z-50 sm:right-auto sm:w-full sm:max-w-[30rem] overflow-x-hidden overflow-y-auto rounded-xl p-1"
           style={{
             // Float 8px above the input box. Inline (not a Tailwind arbitrary
             // value) so the calc() spacing is guaranteed valid CSS.
             bottom: 'calc(100% + 8px)',
-            // Keep the entire menu within short visual viewports. The
-            // command rows remain keyboard reachable inside this scroll box.
+            // Keep the entire menu within short visual viewports, and never
+            // taller than ~22rem so it does not climb over the chat header.
+            // The command rows remain keyboard reachable inside this scroll
+            // box.
             maxHeight:
-              'var(--slash-menu-max-height, min(60dvh, calc(100dvh - 16px)))',
+              'min(var(--slash-menu-max-height, min(60dvh, calc(100dvh - 16px))), 22rem)',
             overflowY: 'auto',
             overscrollBehavior: 'contain',
             background: 'var(--nous-bg-2)',

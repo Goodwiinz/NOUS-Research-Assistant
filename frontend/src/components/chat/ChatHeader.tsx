@@ -103,7 +103,7 @@ export const ChatHeader = memo(function ChatHeader({
   return (
     <div
       data-testid="chat-mobile-header"
-      className="bg-(--nous-bg-1) flex h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40"
+      className="bg-(--nous-bg-1) flex min-w-0 h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40"
     >
       {/* Left: sidebar trigger + title */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -118,15 +118,17 @@ export const ChatHeader = memo(function ChatHeader({
           </button>
         )}
 
-        {/* Conversation title — visible at all breakpoints */}
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="text-[13px] sm:text-sm font-medium text-(--nous-fg-1) truncate"
+        {/* Conversation title — visible at all breakpoints. It is the page's
+            one h1; min-w-0 down the flex chain lets it ellipsize instead of
+            being hard-clipped mid-word. */}
+        <div className="flex flex-1 items-center gap-2 min-w-0">
+          <h1
+            className="m-0 min-w-0 truncate text-[13px] sm:text-sm font-medium leading-normal text-(--nous-fg-1)"
             style={{ fontFamily: 'var(--nous-font-ui)' }}
             title={chatTitle}
           >
             {chatTitle}
-          </span>
+          </h1>
         </div>
       </div>
 

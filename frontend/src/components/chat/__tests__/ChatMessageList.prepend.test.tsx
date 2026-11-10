@@ -101,7 +101,9 @@ describe('ChatMessageList prepend scroll compensation', () => {
     });
     scroller.scrollTop = 50;
     fireEvent.scroll(scroller);
-    await waitFor(() => expect(screen.getByText('New messages')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('Jump to latest')).toBeTruthy()
+    );
 
     rerender(
       <ChatMessageList
@@ -175,5 +177,39 @@ describe('ChatMessageList prepend scroll compensation', () => {
       />
     );
     expect(scroller.scrollTop).toBe(100); // append → auto-scroll handles it, not us
+  });
+  it('does not call prepended older history "New messages"', async () => {
+    const initial = [msg('p3', 'user'), msg('p4', 'assistant')];
+    const { container, rerender } = render(
+      <ChatMessageList {...baseProps} activeThreadId="t-p" messages={initial} />
+    );
+    const scroller = container.querySelector(
+      '[aria-label="Conversation transcript"]'
+    ) as HTMLElement;
+    Object.defineProperty(scroller, 'scrollHeight', {
+      configurable: true,
+      value: 1200,
+    });
+    Object.defineProperty(scroller, 'clientHeight', {
+      configurable: true,
+      value: 300,
+    });
+    scroller.scrollTop = 400;
+    fireEvent.scroll(scroller);
+    await waitFor(() =>
+      expect(screen.getByText('Jump to latest')).toBeTruthy()
+    );
+
+    rerender(
+      <ChatMessageList
+        {...baseProps}
+        activeThreadId="t-p"
+        messages={[msg('p1', 'user'), msg('p2', 'assistant'), ...initial]}
+      />
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.queryByText('New messages')).toBeNull();
+    expect(screen.getByText('Jump to latest')).toBeTruthy();
   });
 });

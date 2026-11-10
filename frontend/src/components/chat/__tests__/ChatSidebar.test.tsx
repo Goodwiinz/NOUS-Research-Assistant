@@ -291,6 +291,47 @@ describe('ChatSidebar', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    [
+      'I can run: - **Terminal commands** and `scripts`',
+      'I can run: Terminal commands and scripts',
+    ],
+    [
+      'Project Cedar Lantern has **seven** sensors',
+      'Project Cedar Lantern has seven sensors',
+    ],
+    ['## Summary\n> quoted _note_ here', 'Summary quoted note here'],
+    [
+      'See [the paper](https://example.com/p) and ![fig](x.png)\n1. first',
+      'See the paper and fig first',
+    ],
+    ['```python\nprint(1)\n```\n* item', 'print(1) item'],
+    ['call load_doc_text now', 'call load_doc_text now'],
+    ['so 2 + 2 is 4, a - b is not', 'so 2 + 2 is 4, a - b is not'],
+    [
+      'Tools: - **Search** finds it. - **Read** opens it',
+      'Tools: Search finds it. Read opens it',
+    ],
+  ])('strips markdown from the preview %#', (previewText, expected) => {
+    render(
+      <ChatSidebar
+        {...defaultProps}
+        conversations={[
+          {
+            id: 'conv-md',
+            title: 'Markdown preview',
+            messages: [],
+            previewText,
+            updatedAt: Date.now(),
+            messageCount: 2,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
   it('truncates a persisted list preview with the same sidebar limit', () => {
     render(
       <ChatSidebar

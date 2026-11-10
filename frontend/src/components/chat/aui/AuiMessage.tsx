@@ -65,6 +65,7 @@ import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { normalizeCitation } from '@/utils/citationNormalizer';
 import { getVisibleCitations, type Citation } from '@/utils/citationParser';
+import { stripHighlightTags } from '@/utils/searchHighlight';
 import { toToolCallParts } from './convertMessage';
 import {
   DraftTaskStatus,
@@ -611,7 +612,7 @@ function AuiStreamingBody(): ReactElement {
               ? `p. ${citation.pageNumber}`
               : `passage ${index + 1}`,
             score,
-            text: citation.content ?? '',
+            text: stripHighlightTags(citation.content) ?? '',
           },
         ];
       }),
