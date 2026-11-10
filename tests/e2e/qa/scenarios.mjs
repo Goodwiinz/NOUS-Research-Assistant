@@ -192,15 +192,40 @@ async function makeThread(session, evidence, title = 'lifecycle', options = {}) 
   return { workspaceId, conversationId, threadId };
 }
 
-async function setDefaultWorkspaceCache(page, workspaceId) {
-  return page.evaluate((id) => {
-    const keys = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id'];
+// Must match frontend/src/services/workspaceService.ts WS_CACHE_VERSION.
+export const WORKSPACE_CACHE_VERSION = 1;
+const WORKSPACE_CACHE_KEYS = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id', 'default-conversation-id'];
+
+/**
+ * Select an owned workspace through the account-stamped cache contract the
+ * app reads (workspaceService.readCachedWorkspace). A record without the
+ * current version and the signed-in account's id is discarded unread, so the
+ * app would fall back to the account's default workspace and every
+ * fixture-scoped wait would run to the scenario timeout.
+ */
+export async function setDefaultWorkspaceCache(session, page, workspaceId) {
+  session.ledger?.requireOwned?.('workspace', workspaceId);
+  const actor = await session.request('/api/v1/auth/me', { target: 'backend' });
+  const ownerUserId = actor.data?.user?.id;
+  assertThat(UUID.test(String(ownerUserId)), 'Workspace selection requires the authenticated account identity');
+  const workspace = await session.request(`/api/v2/workspaces/${encodeURIComponent(workspaceId)}`, { target: 'backend' });
+  assertThat(workspace.data?.id === workspaceId, 'Workspace selection fetched a different workspace than the owned fixture');
+  const record = { version: WORKSPACE_CACHE_VERSION, ownerUserId, cachedAt: Date.now(), workspace: workspace.data };
+  return page.evaluate(({ keys, value }) => {
     const previous = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)]));
-    localStorage.setItem('default-workspace-object', JSON.stringify({ id }));
-    localStorage.setItem('default-workspace-cached-at', String(Date.now()));
-    localStorage.setItem('default-workspace-id', id);
+    keys.forEach((key) => localStorage.removeItem(key));
+    localStorage.setItem('default-workspace-object', JSON.stringify(value));
     return previous;
-  }, workspaceId);
+  }, { keys: WORKSPACE_CACHE_KEYS, value: record });
+}
+
+/**
+ * Inner waits get a fraction of the scenario budget. A wait bounded by the
+ * full scenario timeout loses the race to the runner's timeout, which halts
+ * the whole campaign instead of failing this scenario with its own message.
+ */
+export function stepTimeout(session) {
+  return Math.max(1, Math.floor(session.config.timeoutMs / 4));
 }
 
 async function restoreDefaultWorkspaceCache(page, previous) {
@@ -465,7 +490,7 @@ const HITL_DENIED_TEXT = 'Action cancelled by user';
 async function driveProjectCreation(session, evidence, decision) {
   const fixture = await makeThread(session, evidence, `project ${decision}`);
   const page = await session.login();
-  const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+  const previousCache = await setDefaultWorkspaceCache(session, page, fixture.workspaceId);
   const projectName = `${evidence.fixturePrefix} project ${decision}`;
   const findProject = async () => {
     const response = await session.request(`/api/v1/projects?search=${encodeURIComponent(projectName)}&limit=10`, { target: 'backend' });
@@ -776,7 +801,7 @@ const scenarios = [
     async run(session, evidence) {
       const fixture = await makeThread(session, evidence, 'send');
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+      const previousCache = await setDefaultWorkspaceCache(session, page, fixture.workspaceId);
       const token = 'KestrelAck42';
       try {
         await session.goto(threadUrl(fixture.threadId));
@@ -865,18 +890,19 @@ const scenarios = [
       const firstTitle = `${evidence.fixturePrefix} history-a`;
       const secondTitle = `${evidence.fixturePrefix} history-b`;
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, firstFixture.workspaceId);
+      const previousCache = await setDefaultWorkspaceCache(session, page, firstFixture.workspaceId);
+      const waitMs = stepTimeout(session);
       try {
         await session.goto(threadUrl(firstFixture.threadId));
         const rows = page.locator('button.sb-conv');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
         const search = page.getByLabel('Search threads');
         await search.fill('history-a');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
         await waitForCondition(
           async () => (await rows.filter({ hasText: secondTitle }).count()) === 0,
-          session.config.timeoutMs,
+          waitMs,
           'History search still displayed the other owned conversation'
         );
         assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
@@ -885,12 +911,12 @@ const scenarios = [
         await message.fill(draft);
         assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
         await search.fill('');
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
         await rows.filter({ hasText: secondTitle }).first().click();
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
             && (await messageComposer(page).inputValue()) !== draft,
-          session.config.timeoutMs,
+          waitMs,
           'Sidebar switch to history-b did not restore an independent draft'
         );
         assertThat(await messageComposer(page).inputValue() !== draft, 'Draft from history-a leaked into history-b');
@@ -898,7 +924,7 @@ const scenarios = [
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
             && (await messageComposer(page).inputValue()) === draft,
-          session.config.timeoutMs,
+          waitMs,
           'Sidebar switch back to history-a did not restore its draft'
         );
         assertThat(await messageComposer(page).inputValue() === draft, 'History-a draft was not restored after returning');
@@ -917,12 +943,16 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const fixture = await makeThread(session, evidence, 'export');
-      await session.request('/api/v2/messages', {
-        target: 'backend', method: 'POST', json: { thread_id: fixture.threadId, content: `${evidence.fixturePrefix} export marker`, client_message_id: randomUUID() },
+      // The thread title also carries fixturePrefix, so only a marker that
+      // appears nowhere but the message body proves the message was exported.
+      const marker = `export-body-${randomUUID()}`;
+      const created = await session.request('/api/v2/messages', {
+        target: 'backend', method: 'POST', json: { thread_id: fixture.threadId, content: `${evidence.fixturePrefix} ${marker}`, client_message_id: randomUUID() },
       });
+      assertThat(created.status >= 200 && created.status < 300, `Export fixture message was not created (${created.status})`);
       const response = await session.request(`/api/v1/export/thread/${fixture.threadId}?format=markdown`, { target: 'backend', method: 'POST' });
-      assertThat(response.text.includes(evidence.fixturePrefix), 'Markdown export omitted the owned marker');
-      return { assertion: 'Markdown export contains the exact owned fixture marker', evidence: [{ contentType: response.headers.get('content-type') }] };
+      assertThat(String(response.text ?? '').includes(marker), 'Markdown export omitted the owned message body');
+      return { assertion: 'Markdown export contains the owned message body marker', evidence: [{ contentType: response.headers?.get?.('content-type') ?? null }] };
     },
   },
   {
@@ -1388,7 +1418,8 @@ const scenarios = [
       assertThat(persistedValues.length === expectedTranscript.length, `Missing-thread fixture persisted an unexpected number of messages (${persistedValues.length})`);
       assertThat(persistedValues.every((item, index) => item?.role === expectedTranscript[index].role && item?.content === expectedTranscript[index].content), 'Missing-thread fixture transcript did not match its exact expected message');
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+      const previousCache = await setDefaultWorkspaceCache(session, page, fixture.workspaceId);
+      const waitMs = stepTimeout(session);
       try {
         const response = await session.goto('/chat?thread=00000000-0000-4000-8000-000000000000');
         const path = new URL(session.page.url()).pathname;
@@ -1396,11 +1427,11 @@ const scenarios = [
         assertThat(path.startsWith('/chat'), `Unexpected missing-thread navigation: ${path}`);
         await waitForCondition(
           () => new URL(page.url()).searchParams.get('thread') === fixture.threadId,
-          session.config.timeoutMs,
+          waitMs,
           'Missing thread did not recover to the explicitly owned workspace fixture'
         );
         const transcript = page.locator('[data-role="user"], [data-role="assistant"]');
-        await transcript.first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await transcript.first().waitFor({ state: 'visible', timeout: waitMs });
         const renderedMessages = await transcript.evaluateAll((nodes) => nodes.map((node) => {
           const body = node.querySelector('.nous-chat-body, [data-quotable]');
           return (body?.textContent ?? node.textContent ?? '').trim();
@@ -1440,14 +1471,23 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const page = await authenticatedPage(session, '/chat');
+      const name = `${evidence.fixturePrefix.replace(/[^A-Za-z0-9_-]/g, '_')}-unsupported.exe`;
       await page.getByLabel('Attach file', { exact: true }).setInputFiles({
-        name: `${evidence.fixturePrefix}.exe`,
+        name,
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('MZ'),
       });
-      const error = latestAlertLocator(page);
-      await error.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-      return { assertion: 'Unsupported attachment is rejected with a user-facing alert', evidence: ['Attach file', 'role=alert'] };
+      // The composer marks the rejected attachment itself (ChatInput.tsx);
+      // an unrelated role=alert elsewhere on the page proves nothing.
+      await page.getByLabel(`Upload failed for ${name}`, { exact: true }).waitFor({ state: 'visible', timeout: stepTimeout(session) });
+      const listed = await session.request(`/api/v1/documents?search=${encodeURIComponent(name)}&size=100`, { target: 'backend' });
+      assertThat(listed.status === 200 && Array.isArray(listed.data?.documents), `Document list for the rejection check was unavailable (${listed.status})`);
+      const created = listed.data.documents.filter((item) => item?.filename === name || String(item?.title ?? '').includes(name));
+      for (const item of created) {
+        if (UUID.test(String(item?.id))) session.registerFixture('document', String(item.id), { filename: name });
+      }
+      assertThat(created.length === 0, 'Unsupported attachment created an owned document');
+      return { assertion: 'Unsupported attachment is marked failed on its chip and creates no document', evidence: ['Attach file', `Upload failed for ${name}`, { documentsWithName: 0 }] };
     },
   },
   {

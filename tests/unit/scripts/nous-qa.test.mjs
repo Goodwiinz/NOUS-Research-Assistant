@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity, sanitizeAssertionEvidence } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
+import { WORKSPACE_CACHE_VERSION, assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, setDefaultWorkspaceCache, smokeLogin, stepTimeout } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -1377,4 +1377,148 @@ test('idempotency oracle rejects a duplicate persisted row even when IDs are ech
     clientMessageId: 'cmid-1',
     content: 'exact content',
   }), /different message ID/i);
+});
+
+const QA_USER_ID = 'd6d6d6d6-d6d6-46d6-86d6-d6d6d6d6d6d6';
+const QA_WORKSPACE_ID = 'e7e7e7e7-e7e7-47e7-87e7-e7e7e7e7e7e7';
+
+function fakeLocalStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    values,
+    getItem: (key) => (values.has(key) ? values.get(key) : null),
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+}
+
+async function withFakeLocalStorage(storage, work) {
+  const previous = globalThis.localStorage;
+  globalThis.localStorage = storage;
+  try {
+    return await work();
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  }
+}
+
+test('workspace override writes the account-stamped record the app accepts', async () => {
+  const storage = fakeLocalStorage({ 'default-workspace-id': 'legacy', 'default-conversation-id': 'stale' });
+  const session = {
+    request: async (path) => {
+      if (path === '/api/v1/auth/me') return { status: 200, data: { user: { id: QA_USER_ID } } };
+      if (path === `/api/v2/workspaces/${QA_WORKSPACE_ID}`) return { status: 200, data: { id: QA_WORKSPACE_ID, name: 'QA' } };
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const page = { evaluate: async (fn, arg) => fn(arg) };
+  const previous = await withFakeLocalStorage(storage, () => setDefaultWorkspaceCache(session, page, QA_WORKSPACE_ID));
+  const record = JSON.parse(storage.getItem('default-workspace-object'));
+  // Mirrors workspaceService.readCachedWorkspace: version + owner + fresh + workspace.id.
+  assert.equal(record.version, WORKSPACE_CACHE_VERSION);
+  assert.equal(record.ownerUserId, QA_USER_ID);
+  assert.equal(typeof record.cachedAt, 'number');
+  assert.ok(Date.now() - record.cachedAt < 60_000);
+  assert.equal(record.workspace.id, QA_WORKSPACE_ID);
+  assert.equal(storage.getItem('default-workspace-id'), null, 'legacy loose keys must be cleared');
+  assert.equal(previous['default-conversation-id'], 'stale', 'previous values are returned for restore');
+});
+
+test('workspace override refuses a workspace the API resolves to another id', async () => {
+  const session = {
+    request: async (path) => (path === '/api/v1/auth/me'
+      ? { status: 200, data: { user: { id: QA_USER_ID } } }
+      : { status: 200, data: { id: 'f8f8f8f8-f8f8-48f8-88f8-f8f8f8f8f8f8' } }),
+  };
+  await assert.rejects(
+    () => setDefaultWorkspaceCache(session, { evaluate: async () => ({}) }, QA_WORKSPACE_ID),
+    /different workspace/
+  );
+});
+
+test('scenario inner waits are bounded below the scenario timeout', () => {
+  assert.ok(stepTimeout({ config: { timeoutMs: 180_000 } }) < 180_000);
+  assert.equal(stepTimeout({ config: { timeoutMs: 1 } }), 1);
+});
+
+function exportSession(exportText) {
+  const ids = ['81818181-8181-4181-8181-818181818181', '92929292-9292-4292-8292-929292929292', 'a3a3a3a3-a3a3-43a3-83a3-a3a3a3a3a3a3'];
+  let index = 0;
+  const posted = [];
+  return {
+    posted,
+    login: async () => {},
+    registerFixture: () => {},
+    request: async (path, options = {}) => {
+      if (path.startsWith('/api/v1/export/')) return { status: 200, text: exportText(posted), headers: new Map([['content-type', 'text/markdown']]) };
+      if (path === '/api/v2/messages') {
+        posted.push(options.json.content);
+        return { status: 201, data: { id: 'b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4' } };
+      }
+      return { status: 201, data: { id: ids[index++ % ids.length] } };
+    },
+  };
+}
+
+test('markdown export fails when only the thread title carries the fixture prefix', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.export-markdown');
+  const evidence = { fixturePrefix: 'NOUS QA run-1' };
+  await assert.rejects(
+    () => scenario.run(exportSession(() => '# NOUS QA run-1 export\n\n_No messages_\n'), evidence),
+    /omitted the owned message body/
+  );
+  const result = await scenario.run(exportSession((posted) => `# NOUS QA run-1 export\n\n${posted.join('\n')}\n`), evidence);
+  assert.match(result.assertion, /message body/);
+});
+
+function attachmentSession({ chipShown, documents, unrelatedAlert = true }) {
+  const registered = [];
+  let attachedName = null;
+  const page = {
+    url: () => 'http://127.0.0.1:3000/chat',
+    getByRole: (role) => ({
+      last: () => ({ waitFor: async () => { if (!(role === 'alert' && unrelatedAlert)) throw new Error('no alert'); } }),
+    }),
+    getByLabel: (label) => ({
+      setInputFiles: async (file) => { attachedName = file.name; },
+      waitFor: async () => {
+        if (!(chipShown && label === `Upload failed for ${attachedName}`)) throw new Error('synthetic locator timeout');
+      },
+    }),
+  };
+  return {
+    registered,
+    config: { timeoutMs: 40 },
+    page,
+    login: async () => {},
+    goto: async () => {},
+    assertTrustedBrowserUrl: () => {},
+    registerFixture: (kind, id) => registered.push([kind, id]),
+    request: async (path) => {
+      assert.match(path, /^\/api\/v1\/documents\?search=/);
+      return { status: 200, data: { documents: documents(attachedName), pagination: {} } };
+    },
+  };
+}
+
+test('unsupported attachment needs its own failed chip, not any alert', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const evidence = { fixturePrefix: 'NOUS QA run-2' };
+  await assert.rejects(
+    () => scenario.run(attachmentSession({ chipShown: false, documents: () => [] }), evidence),
+    /synthetic locator timeout/
+  );
+  const result = await scenario.run(attachmentSession({ chipShown: true, documents: () => [] }), evidence);
+  assert.match(result.assertion, /creates no document/);
+});
+
+test('unsupported attachment fails when a document was created anyway', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const session = attachmentSession({
+    chipShown: true,
+    documents: (name) => [{ id: 'c5c5c5c5-c5c5-45c5-85c5-c5c5c5c5c5c5', filename: name, title: name }],
+  });
+  await assert.rejects(() => scenario.run(session, { fixturePrefix: 'NOUS QA run-3' }), /created an owned document/);
+  assert.deepEqual(session.registered, [['document', 'c5c5c5c5-c5c5-45c5-85c5-c5c5c5c5c5c5']], 'a leaked document is registered for cleanup');
 });

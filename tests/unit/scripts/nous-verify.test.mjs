@@ -815,6 +815,9 @@ function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => 
     request: async (path, options = {}) => {
       if (options.method === 'POST') return { status: 201, data: { id: id() } };
       if (path.startsWith('/api/v1/projects')) return { status: 200, data: { projects: projects(state) } };
+      // Account-stamped workspace selection (setDefaultWorkspaceCache).
+      if (path === '/api/v1/auth/me') return { status: 200, data: { user: { id: '00000000-0000-4000-8000-0000000000ff' } } };
+      if (path.startsWith('/api/v2/workspaces/')) return { status: 200, data: { id: decodeURIComponent(path.split('/').pop()) } };
       if (path.includes('/messages')) return { status: 200, data: { messages: messages(state) } };
       throw new Error(`unexpected request ${path}`);
     },
