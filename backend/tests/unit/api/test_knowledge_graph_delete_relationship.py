@@ -81,3 +81,17 @@ def test_service_error_still_returns_500(
     response = test_client.delete(URL)
 
     assert response.status_code == 500
+
+
+def test_service_failure_is_not_reported_as_a_miss() -> None:
+    """A Neo4j failure must propagate, not return False (which means 404)."""
+    from src.services.knowledge_graph.knowledge_graph_service import (
+        KnowledgeGraphService,
+    )
+
+    service = KnowledgeGraphService.__new__(KnowledgeGraphService)
+    with patch.object(
+        KnowledgeGraphService, "get_session", side_effect=RuntimeError("neo4j down")
+    ):
+        with pytest.raises(RuntimeError, match="neo4j down"):
+            service.delete_relationship("rel-1", organization_id="org-1")
