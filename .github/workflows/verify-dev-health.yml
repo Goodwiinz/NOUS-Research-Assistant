@@ -1,0 +1,38 @@
+name: Verify Dev Health
+
+# CI7: Release Dev ends at `gh pr merge --auto` on the values-aws.yaml
+# proposal and Argo CD syncs out of band, so nothing verified that dev serves
+# afterwards. Auto-merged GitOps commits are pushed with GITHUB_TOKEN and
+# trigger no push workflows, so this gate runs on a schedule instead: a red
+# run (and its failure notification) means dev stopped answering healthy.
+# It cannot tell which build is live: /health exposes no build identity.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: verify-dev-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    name: Dev backend answers healthy
+    if: github.repository == 'goodwiins/NOUS-Research-Assistant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci/verify_deploy_health.py
+          sparse-checkout-cone-mode: false
+      - name: Poll dev /health
+        env:
+          HEALTH_URL: ${{ vars.DEV_API_HEALTH_URL || 'https://dev-api.goodwiinz.tech/health' }}
+        run: |
+          python3 scripts/ci/verify_deploy_health.py \
+            --url "$HEALTH_URL" \
+            --timeout 600 --interval 15 --consecutive 3
