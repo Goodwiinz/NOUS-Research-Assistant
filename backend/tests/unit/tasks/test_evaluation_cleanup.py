@@ -8,6 +8,7 @@ EvaluationComparison has no ``job_id`` column (it references jobs through
 from __future__ import annotations
 
 import uuid
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,11 +24,11 @@ from src.models.evaluation import (  # noqa: E402
 from src.tasks import evaluation_tasks as et  # noqa: E402
 
 
-def _session_for(old_job):
+def _session_for(old_job: MagicMock) -> tuple[MagicMock, dict[type, MagicMock]]:
     """Sync session mock whose query(model) returns a per-model query mock."""
-    queries: dict = {}
+    queries: dict[type, MagicMock] = {}
 
-    def _query(model):
+    def _query(model: type) -> MagicMock:
         if model not in queries:
             q = MagicMock(name=f"query({model.__name__})")
             if model is EvaluationJob:
@@ -40,18 +41,20 @@ def _session_for(old_job):
     return db, queries
 
 
-def _filter_expr(query_mock):
+def _filter_expr(query_mock: MagicMock) -> Any:
     query_mock.filter.assert_called_once()
     (expr,), _ = query_mock.filter.call_args
     return expr
 
 
-def _compiled(expr):
+def _compiled(expr: Any) -> tuple[str, dict[str, Any]]:
     compiled = expr.compile()
-    return str(compiled), compiled.params
+    return str(compiled), dict(compiled.params)
 
 
-def test_cleanup_deletes_comparisons_by_both_job_fks(monkeypatch):
+def test_cleanup_deletes_comparisons_by_both_job_fks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     job = MagicMock()
     job.id = uuid.uuid4()
     db, queries = _session_for(job)
@@ -88,7 +91,9 @@ def test_cleanup_deletes_comparisons_by_both_job_fks(monkeypatch):
     db.close.assert_called_once()
 
 
-def test_cleanup_with_no_old_jobs_skips_child_deletes(monkeypatch):
+def test_cleanup_with_no_old_jobs_skips_child_deletes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     job_query = MagicMock()
     job_query.filter.return_value.all.return_value = []
     db = MagicMock()

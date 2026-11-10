@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -101,7 +102,7 @@ async def _create(
     return message
 
 
-async def _stored_user_id(session: AsyncSession, message_id: uuid.UUID):
+async def _stored_user_id(session: AsyncSession, message_id: Any) -> Any:
     return (
         await session.execute(
             select(ChatMessage.user_id).where(ChatMessage.id == message_id)
