@@ -2553,13 +2553,19 @@ Key takeaways include the importance of continued investigation and the potentia
         """Convert markdown to LaTeX"""
         import re
 
-        latex = self._latex_escape(markdown_content)
-
-        # Convert headers
-        latex = re.sub(
-            r"^## (\d+\.\s)?(.+)$", r"\\section{\2}", latex, flags=re.MULTILINE
-        )
-        latex = re.sub(r"^### (.+)$", r"\\subsection{\1}", latex, flags=re.MULTILINE)
+        # Convert headers on the raw markdown, escaping only the user text, so
+        # the R6-L8 escaping cannot hide the "##" markers from the header match.
+        lines = []
+        for line in markdown_content.split("\n"):
+            sub = re.match(r"^### (.+)$", line)
+            sec = re.match(r"^## (\d+\.\s)?(.+)$", line)
+            if sub:
+                lines.append(f"\\subsection{{{self._latex_escape(sub.group(1))}}}")
+            elif sec:
+                lines.append(f"\\section{{{self._latex_escape(sec.group(2))}}}")
+            else:
+                lines.append(self._latex_escape(line))
+        latex = "\n".join(lines)
 
         # Convert [Doc N] to \cite{docN}
         latex = re.sub(r"\[Doc (\d+)\]", r"\\cite{doc\1}", latex)

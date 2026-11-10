@@ -1948,8 +1948,10 @@ class KnowledgeGraphService:
                     )
                     return False
         except Exception as e:
+            # Re-raise: returning False here made a Neo4j failure look like a
+            # confirmed miss, which the route reports as 404.
             logger.error(f"Error deleting relationship {relationship_id}: {e}")
-            return False
+            raise
 
     # Graph Search and Traversal
     def find_related_entities(
