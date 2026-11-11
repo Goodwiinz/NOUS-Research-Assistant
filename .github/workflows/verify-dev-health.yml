@@ -4,8 +4,13 @@ name: Verify Dev Health
 # proposal and Argo CD syncs out of band, so nothing verified that dev serves
 # afterwards. Auto-merged GitOps commits are pushed with GITHUB_TOKEN and
 # trigger no push workflows, so this gate runs on a schedule instead: a red
-# run (and its failure notification) means dev stopped answering healthy.
-# It cannot tell which build is live: /health exposes no build identity.
+# run (and its failure notification) means dev is down or serving the wrong
+# build. Healthy alone is not enough: /health is static and the backend rolls
+# with maxSurge 1 / maxUnavailable 0, so a crash-looping new image leaves the
+# old pod answering. The probe therefore also compares /health git_sha (dev
+# sets HEALTH_EXPOSE_BUILD_SHA) with backend.image.sourceSha in values-aws.yaml
+# on develop, failing once the values file is older than --grace-minutes.
+# The gate is schedule-only; it reports, it does not block releases.
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -20,14 +25,22 @@ permissions:
 
 jobs:
   health:
-    name: Dev backend answers healthy
+    name: Dev backend answers healthy on the selected build
     if: github.repository == 'goodwiins/NOUS-Research-Assistant'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: scripts/ci/verify_deploy_health.py
+          ref: develop
+          # Full commit history (no blobs) so `git log -1 -- values-aws.yaml`
+          # dates the last values change; a shallow clone would report the
+          # boundary commit and stretch the rollout grace window.
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            scripts/ci/verify_deploy_health.py
+            infrastructure/helm/knowledge-graph-analytics/values-aws.yaml
           sparse-checkout-cone-mode: false
       - name: Poll dev /health
         env:
@@ -35,4 +48,6 @@ jobs:
         run: |
           python3 scripts/ci/verify_deploy_health.py \
             --url "$HEALTH_URL" \
-            --timeout 600 --interval 15 --consecutive 3
+            --timeout 600 --interval 15 --consecutive 3 \
+            --values-file infrastructure/helm/knowledge-graph-analytics/values-aws.yaml \
+            --grace-minutes 20

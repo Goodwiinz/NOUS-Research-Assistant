@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
     SECRET_KEY: str = ""
+    # CI7: when True, unauthenticated GET /health also returns ``git_sha`` (the
+    # image's baked-in GIT_SHA, only if it is a full 40-char lowercase hex SHA)
+    # so the post-deploy gate can tell which build serves. Default off keeps
+    # the audit-I17 no-fingerprint contract; dev opts in via values-aws.yaml.
+    HEALTH_EXPOSE_BUILD_SHA: bool = False
 
     # Break-glass override for durable agent state: when True, the LangGraph
     # checkpointer / memory store may fall back to non-durable in-memory

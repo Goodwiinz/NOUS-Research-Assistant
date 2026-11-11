@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import socket
+import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,3 +143,172 @@ def test_cli_exit_codes(server: tuple[str, _Script]) -> None:
         )
         == 1
     )
+
+
+# --- build identity (CI7): /health git_sha vs backend.image.sourceSha ---
+
+SHA_A = "a" * 40
+SHA_B = "b" * 40
+CHANGED_AT = 1_000_000
+
+
+def _healthy_with(sha: str) -> Response:
+    return (200, ('{"status":"healthy","git_sha":"%s"}' % sha).encode())
+
+
+def _check(url: str, *, age_seconds: float, grace_minutes: float = 20) -> bool:
+    lines: list[str] = []
+    ok = health.check_build(
+        url,
+        expected_sha=SHA_A,
+        changed_at=CHANGED_AT,
+        grace_seconds=grace_minutes * 60,
+        request_timeout=2.0,
+        now=lambda: CHANGED_AT + age_seconds,
+        log=lines.append,
+    )
+    return bool(ok)
+
+
+def test_build_check_passes_when_the_expected_sha_serves(
+    server: tuple[str, _Script],
+) -> None:
+    url, script = server
+    script.responses = [_healthy_with(SHA_A)]
+    assert _check(url, age_seconds=3 * 3600) is True
+
+
+def test_build_check_tolerates_a_mismatch_inside_the_grace_window(
+    server: tuple[str, _Script],
+) -> None:
+    url, script = server
+    script.responses = [_healthy_with(SHA_B)]
+    assert _check(url, age_seconds=5 * 60) is True
+
+
+def test_build_check_fails_a_mismatch_after_the_grace_window(
+    server: tuple[str, _Script],
+) -> None:
+    url, script = server
+    script.responses = [_healthy_with(SHA_B)]
+    assert _check(url, age_seconds=21 * 60) is False
+
+
+def test_build_check_fails_a_mismatch_when_the_values_file_is_undated(
+    server: tuple[str, _Script],
+) -> None:
+    url, script = server
+    script.responses = [_healthy_with(SHA_B)]
+    assert (
+        health.check_build(
+            url,
+            expected_sha=SHA_A,
+            changed_at=None,
+            grace_seconds=20 * 60,
+            request_timeout=2.0,
+            log=lambda _line: None,
+        )
+        is False
+    )
+
+
+def test_build_check_warns_but_passes_without_git_sha(
+    server: tuple[str, _Script],
+) -> None:
+    url, script = server
+    script.responses = [HEALTHY]
+    lines: list[str] = []
+    assert (
+        health.check_build(
+            url,
+            expected_sha=SHA_A,
+            changed_at=CHANGED_AT,
+            grace_seconds=0,
+            request_timeout=2.0,
+            now=lambda: CHANGED_AT + 86_400,
+            log=lines.append,
+        )
+        is True
+    )
+    assert any(line.startswith("::warning::") for line in lines)
+
+
+_VALUES = """\
+frontend:
+  image:
+    sourceSha: "{other}"
+backend:
+  enabled: true
+  image:
+    repository: "example/backend"
+    tag: "{sha}"
+    sourceSha: "{sha}"  # trailing comment
+  env:
+    - name: X
+      value: "y"
+"""
+
+
+def test_read_source_sha_reads_the_backend_image_key(tmp_path: Path) -> None:
+    values = tmp_path / "values.yaml"
+    values.write_text(_VALUES.format(sha=SHA_A, other=SHA_B))
+    assert health.read_source_sha(values) == SHA_A
+
+
+@pytest.mark.parametrize("sha", ["", "unknown", SHA_A[:7], SHA_A.upper()])
+def test_read_source_sha_rejects_non_full_shas(tmp_path: Path, sha: str) -> None:
+    values = tmp_path / "values.yaml"
+    values.write_text(_VALUES.format(sha=sha, other=SHA_B))
+    with pytest.raises(ValueError):
+        health.read_source_sha(values)
+
+
+def test_repo_values_file_carries_a_source_sha() -> None:
+    values = (
+        _SCRIPT.parents[2]
+        / "infrastructure"
+        / "helm"
+        / "knowledge-graph-analytics"
+        / "values-aws.yaml"
+    )
+    assert health.SHA_RE.fullmatch(health.read_source_sha(values))
+
+
+def _git(cwd: Path, *args: str, when: int) -> None:
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        "GIT_AUTHOR_DATE": f"@{when} +0000",
+        "GIT_COMMITTER_DATE": f"@{when} +0000",
+        "HOME": str(cwd),
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+    }
+    subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+
+
+def test_cli_dates_the_values_file_by_its_last_commit(
+    server: tuple[str, _Script], tmp_path: Path
+) -> None:
+    url, script = server
+    values = tmp_path / "values-aws.yaml"
+    values.write_text(_VALUES.format(sha=SHA_A, other=SHA_B))
+    _git(tmp_path, "init", "-q", when=0)
+    _git(tmp_path, "add", values.name, when=0)
+    _git(tmp_path, "commit", "-q", "-m", "values", when=1_000_000)
+    (tmp_path / "other.txt").write_text("later commit, other file")
+    _git(tmp_path, "add", "other.txt", when=0)
+    _git(tmp_path, "commit", "-q", "-m", "other", when=2_000_000_000)
+
+    assert health.last_changed_at(values) == 1_000_000
+
+    base = ["--url", url, "--consecutive", "1", "--timeout", "1"]
+    base += ["--values-file", str(values)]
+    script.responses = [_healthy_with(SHA_A)]
+    assert health.main(base) == 0
+    script.responses = [_healthy_with(SHA_B)]
+    assert health.main(base) == 1
+    assert health.main([*base, "--grace-minutes", "1e9"]) == 0
+    script.responses = [HEALTHY]
+    assert health.main(base) == 0
