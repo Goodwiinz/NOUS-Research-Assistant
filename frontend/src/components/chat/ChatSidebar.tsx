@@ -82,6 +82,7 @@ interface DateSection {
 }
 
 const SIDEBAR_PREVIEW_MAX_CHARS = 60;
+const SIDEBAR_PREVIEW_SOURCE_MAX_CHARS = 1000;
 
 /**
  * Reduce a markdown message to the plain words a reader would see, so a row
@@ -102,10 +103,14 @@ function markdownToPlainText(markdown: string): string {
       // A summary with its newlines already collapsed leaves list markers
       // mid-line ("I can run: - Terminal"). Only a marker that follows
       // sentence punctuation counts, so "a - b" and "2 + 2" keep their sign.
-      .replace(/([:.;!?])\s+[-*+]\s+(?=\S)/g, '$1 ')
-      .replace(/(\*\*|__)(.+?)\1/g, '$2')
-      .replace(/\*(\S(?:.*?\S)?)\*/g, '$1')
-      // Underscore emphasis only at word edges, so snake_case survives.
+      // A marker in front of a number stays too: "Net change: - 5%" is a
+      // sign, and dropping it would reverse the meaning.
+      .replace(/([:.;!?])\s+[-*+]\s+(?![\d.$€£¥])(?=\S)/g, '$1 ')
+      // Emphasis only where the delimiters hug the text and sit at word
+      // edges, so "2*3*4", "x**2 + y**2" and snake_case keep their operators.
+      .replace(/(^|[^\w*])\*\*(\S(?:.*?\S)?)\*\*(?![\w*])/g, '$1$2')
+      .replace(/(^|\W)__(\S(?:.*?\S)?)__(?=\W|$)/g, '$1$2')
+      .replace(/(^|[^\w*])\*([^\s*](?:.*?[^\s*])?)\*(?![\w*])/g, '$1$2')
       .replace(/(^|\W)_(\S(?:.*?\S)?)_(?=\W|$)/g, '$1$2')
       .replace(/~~(.+?)~~/g, '$1')
       .replace(/`+/g, '')
@@ -115,7 +120,12 @@ function markdownToPlainText(markdown: string): string {
 }
 
 function truncatePreview(raw: string): string {
-  const content = markdownToPlainText(raw);
+  // The row shows 60 characters, so only the head of a long message is
+  // cleaned. That also caps the work the lazy emphasis patterns can do on
+  // adversarial input such as thousands of unclosed asterisks.
+  const content = markdownToPlainText(
+    raw.slice(0, SIDEBAR_PREVIEW_SOURCE_MAX_CHARS)
+  );
   return content.length > SIDEBAR_PREVIEW_MAX_CHARS
     ? `${content.substring(0, SIDEBAR_PREVIEW_MAX_CHARS)}…`
     : content;

@@ -24,7 +24,7 @@ export function parseHighlightedSnippet(
   let depth = 0;
   let cursor = 0;
 
-  const push = (text: string) => {
+  const push = (text: string): void => {
     if (!text) return;
     const highlighted = depth > 0;
     const last = segments[segments.length - 1];

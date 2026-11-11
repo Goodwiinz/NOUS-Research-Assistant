@@ -312,6 +312,16 @@ describe('ChatSidebar', () => {
       'Tools: - **Search** finds it. - **Read** opens it',
       'Tools: Search finds it. Read opens it',
     ],
+    ['Net change: - 5% on the week', 'Net change: - 5% on the week'],
+    ['Delta: + 0.4 and total: - $12', 'Delta: + 0.4 and total: - $12'],
+    ['so 2*3*4 is 24', 'so 2*3*4 is 24'],
+    ['x**2 + y**2 = r**2', 'x**2 + y**2 = r**2'],
+    ['area is 2 * 3 * 4 units', 'area is 2 * 3 * 4 units'],
+    ['rated 5 *stars* by __init__ users', 'rated 5 stars by init users'],
+    [
+      '**bold with *nested* words** and ***both***',
+      'bold with nested words and both',
+    ],
   ])('strips markdown from the preview %#', (previewText, expected) => {
     render(
       <ChatSidebar
@@ -330,6 +340,27 @@ describe('ChatSidebar', () => {
     );
 
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it('cleans only the head of a very long preview', () => {
+    render(
+      <ChatSidebar
+        {...defaultProps}
+        conversations={[
+          {
+            id: 'conv-preview-huge',
+            title: 'Huge preview',
+            messages: [],
+            // Unclosed asterisks are the worst case for the emphasis patterns.
+            previewText: '*a '.repeat(20000),
+            updatedAt: Date.now(),
+            messageCount: 2,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText(/^(\*a ){20}…$/)).toBeInTheDocument();
   });
 
   it('truncates a persisted list preview with the same sidebar limit', () => {
