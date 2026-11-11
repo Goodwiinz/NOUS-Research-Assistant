@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 
 
 class RelationshipScopeError(RuntimeError):
-    """Raised when scoped relationship creation finds no endpoint pair."""
+    """Raised when a relationship write has no tenant scope (D2), or a scoped
+    creation finds no in-scope endpoint pair."""
 
 
 def _parse_metadata(metadata_val) -> Dict[str, Any]:
@@ -121,6 +122,30 @@ def _to_lucene_prefix(query: str) -> str:
 
 # Cypher predicate for a call that arrived with no tenant scope at all (D2).
 UNSCOPED_MATCHES_NOTHING = "false"
+# Structured ``error_category`` on the fail-closed log line, so operators can
+# alert on dropped tenant scopes (same ``extra=`` shape the research engine uses).
+UNSCOPED_ERROR_CATEGORY = "kg_unscoped_fail_closed"
+
+
+def _has_tenant_scope(
+    source_document_ids: Optional[List[str]], organization_id: Optional[str]
+) -> bool:
+    """True when the caller supplied an org or a document list (D2)."""
+    return organization_id is not None or source_document_ids is not None
+
+
+def _log_unscoped_fail_closed(method: str) -> None:
+    """Log a dropped tenant scope at ERROR with a structured category (D2).
+
+    Every production caller passes an organization_id or a document list, so
+    reaching this means a scope was dropped upstream; the call fails closed.
+    """
+    logger.error(
+        "%s called with no organization_id or source_document_ids — "
+        "failing closed (no unscoped query runs)",
+        method,
+        extra={"error_category": UNSCOPED_ERROR_CATEGORY, "kg_method": method},
+    )
 
 
 def _entity_scope_predicate(
@@ -153,10 +178,7 @@ def _entity_scope_predicate(
     if not preds:
         # Both scopes None → a dropped tenant scope. Fail closed: match nothing
         # rather than every organization's entities (D2).
-        logger.error(
-            "_entity_scope_predicate called with no organization_id or "
-            "source_document_ids — failing closed (query matches nothing)"
-        )
+        _log_unscoped_fail_closed(f"_entity_scope_predicate({alias})")
         return UNSCOPED_MATCHES_NOTHING
     return "(" + " OR ".join(preds) + ")"
 
@@ -195,12 +217,7 @@ def _two_endpoint_scope(
     # Neither scope supplied → a dropped tenant scope. Fail closed (mirrors
     # _entity_scope_predicate): the traversal matches nothing instead of
     # spanning every organization's entities (#50, D2).
-    logger.error(
-        "_two_endpoint_scope (%s/%s) called with no organization_id or "
-        "source_document_ids — failing closed (traversal matches nothing)",
-        alias_a,
-        alias_b,
-    )
+    _log_unscoped_fail_closed(f"_two_endpoint_scope({alias_a}/{alias_b})")
     return f"\n  AND {UNSCOPED_MATCHES_NOTHING}", {}
 
 
@@ -1428,7 +1445,14 @@ class KnowledgeGraphService:
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
     ) -> List[RelationshipResponse]:
-        """Get all relationships with pagination, optionally org-scoped."""
+        """Get all relationships with pagination, scoped to the caller's tenant.
+
+        With neither organization_id nor source_document_ids this returns
+        ``[]`` without querying (D2): an unscoped listing spans every tenant.
+        """
+        if not _has_tenant_scope(source_document_ids, organization_id):
+            _log_unscoped_fail_closed("get_all_relationships")
+            return []
         # Cap limit to prevent OOM on large graphs
         limit = min(limit, 200)
         try:
@@ -1516,7 +1540,18 @@ class KnowledgeGraphService:
         *,
         extractor: GraphExtractor = GraphExtractor.UNKNOWN,
     ) -> RelationshipResponse:
-        """Create a new relationship between entities, optionally scoped to organization documents"""
+        """Create a relationship between two entities in the caller's tenant.
+
+        Requires ``request.organization_id`` or ``source_document_ids``. With
+        neither it raises :class:`RelationshipScopeError` before any write (D2):
+        an unscoped MERGE could bind entities from two different tenants.
+        """
+        if not request.organization_id and source_document_ids is None:
+            _log_unscoped_fail_closed("create_relationship")
+            raise RelationshipScopeError(
+                "create_relationship refused: no organization_id or "
+                "source_document_ids"
+            )
         start_time = time.time()
         relationship_id = str(uuid.uuid4())
 
@@ -1525,19 +1560,17 @@ class KnowledgeGraphService:
                 # Scope BOTH endpoints to the caller's org so a relationship can
                 # never bind a cross-tenant entity. Prefer the indexed
                 # organization_id; fall back to the source_document_id IN-list
-                # for callers that still pass doc ids; else unscoped (legacy).
+                # for callers that still pass doc ids.
                 if request.organization_id:
                     tenant_filter = (
                         "\nWHERE source.organization_id = $organization_id"
                         " AND target.organization_id = $organization_id"
                     )
-                elif source_document_ids is not None:
+                else:
                     tenant_filter = (
                         "\nWHERE source.source_document_id IN $source_document_ids"
                         " AND target.source_document_id IN $source_document_ids"
                     )
-                else:
-                    tenant_filter = ""
                 # MERGE (not CREATE) so re-ingesting the SAME document does not
                 # pile up duplicate RELATED_TO edges. The dedupe key is
                 # (source, target, type, source_document_id): source_document_id
@@ -1612,14 +1645,9 @@ class KnowledgeGraphService:
 
                 record = result.single()
                 if not record:
-                    scoped = bool(request.organization_id) or (
-                        source_document_ids is not None
+                    raise RelationshipScopeError(
+                        "create_relationship matched no in-scope endpoint pair"
                     )
-                    if scoped:
-                        raise RelationshipScopeError(
-                            "create_relationship matched no in-scope endpoint pair"
-                        )
-                    raise RuntimeError("Failed to create relationship")
 
                 # On MATCH the existing edge keeps its original id, so read it
                 # back from the result rather than returning the freshly minted
@@ -1663,7 +1691,19 @@ class KnowledgeGraphService:
         Read errors are swallowed into ``[]`` by default. Pass ``strict=True``
         when an empty list would be acted on as "no relationships" (entity
         merge deletes the duplicate) so an outage raises instead.
+
+        With neither organization_id nor source_document_ids no query runs
+        (D2): it returns ``[]``, or raises :class:`RelationshipScopeError` when
+        ``strict`` (an empty list there would read as "no edges").
         """
+        if not _has_tenant_scope(source_document_ids, organization_id):
+            _log_unscoped_fail_closed("get_relationships")
+            if strict:
+                raise RelationshipScopeError(
+                    "get_relationships refused: no organization_id or "
+                    "source_document_ids"
+                )
+            return []
         try:
             with self.get_session() as session:
                 conditions = ["(source.id = $entity_id OR target.id = $entity_id)"]
@@ -1785,8 +1825,12 @@ class KnowledgeGraphService:
     ) -> List[RelationshipResponse]:
         """Return every relationship whose BOTH endpoints are in entity_ids — in a
         SINGLE query. Replaces the per-entity get_relationships loop + Python
-        filter (N+1) used by visualization/search endpoints."""
+        filter (N+1) used by visualization/search endpoints. Returns ``[]``
+        without querying when no tenant scope is given (D2)."""
         if not entity_ids:
+            return []
+        if not _has_tenant_scope(source_document_ids, organization_id):
+            _log_unscoped_fail_closed("get_relationships_among")
             return []
         try:
             with self.get_session() as session:
@@ -1828,8 +1872,12 @@ class KnowledgeGraphService:
         """Return every relationship INCIDENT to any entity in entity_ids (either
         endpoint), in a SINGLE query — replaces the per-entity get_relationships
         loop (N+1) in search_graph. Unlike get_relationships_among, the other
-        endpoint may be outside the set."""
+        endpoint may be outside the set. Returns ``[]`` without querying when no
+        tenant scope is given (D2)."""
         if not entity_ids:
+            return []
+        if not _has_tenant_scope(source_document_ids, organization_id):
+            _log_unscoped_fail_closed("get_relationships_for_entities")
             return []
         try:
             with self.get_session() as session:
@@ -2699,7 +2747,15 @@ class KnowledgeGraphService:
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
     ) -> GraphAnalytics:
-        """Get comprehensive graph analytics, optionally scoped to organization documents"""
+        """Get graph analytics for the caller's tenant (and optional project).
+
+        With neither organization_id nor source_document_ids it returns an
+        empty :class:`GraphAnalytics` without querying (D2): whole-graph counts
+        would disclose every tenant's graph size.
+        """
+        if not _has_tenant_scope(source_document_ids, organization_id):
+            _log_unscoped_fail_closed("get_graph_analytics")
+            return GraphAnalytics()
         try:
             with self.get_session() as session:
                 # Build tenant-scoped queries. Unlike the traversal helpers this
@@ -2717,20 +2773,10 @@ class KnowledgeGraphService:
                         "{alias}.source_document_id IN $source_document_ids"
                     )
                     params["source_document_ids"] = source_document_ids
-                if scope_preds:
-                    joined = " AND ".join(scope_preds)
-                    entity_where = "WHERE " + joined.format(alias="e")
-                    rel_where = "WHERE " + joined.format(alias="source")
-                else:
-                    # No tenant scope at all — counts span every organization.
-                    # Log loudly: a None org reaching here means a caller dropped
-                    # scoping, not a legitimate cross-tenant query.
-                    logger.warning(
-                        "get_graph_analytics running UNSCOPED (no organization_id "
-                        "or source_document_ids) — returning all-org counts"
-                    )
-                    entity_where = ""
-                    rel_where = ""
+                # The guard above ensures scope_preds is non-empty.
+                joined = " AND ".join(scope_preds)
+                entity_where = "WHERE " + joined.format(alias="e")
+                rel_where = "WHERE " + joined.format(alias="source")
 
                 # Get the type distributions, then DERIVE the totals from them
                 # (sum of per-type counts) instead of running two extra full
