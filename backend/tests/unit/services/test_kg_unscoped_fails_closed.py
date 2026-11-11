@@ -82,7 +82,9 @@ class _FakeSession:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def run(self, query: str, params: Optional[dict[str, Any]] = None, **kw: Any):
+    def run(
+        self, query: str, params: Optional[dict[str, Any]] = None, **kw: Any
+    ) -> "_FakeResult":
         self.queries.append(str(query))
         self.params.append(dict(params or {}, **kw))
         return _FakeResult(str(query), matches=not _where_false(str(query)))
