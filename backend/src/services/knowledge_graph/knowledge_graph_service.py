@@ -2646,7 +2646,7 @@ class KnowledgeGraphService:
         # Scope both endpoints to the caller's org when known (mirrors
         # create_relationship). Batch ingest uses this path, so fall back to the
         # edge's own source_document_id when no org is set — both endpoints must
-        # share that document — instead of leaving it fully unscoped. MERGE key
+        # share that document. With neither, the write is refused. MERGE key
         # unchanged ((type, source_document_id)).
         if request.organization_id:
             endpoint_filter = (
@@ -2659,7 +2659,14 @@ class KnowledgeGraphService:
                 " AND target.source_document_id = $source_document_id"
             )
         else:
-            endpoint_filter = ""
+            # D2: no org and no source document means no tenant scope. Refuse
+            # rather than MERGE across every tenant's entities; the batch
+            # caller records this in response.errors.
+            _log_unscoped_fail_closed("_create_relationship_in_transaction")
+            raise RelationshipScopeError(
+                "Refusing batch relationship write without organization_id "
+                "or source_document_id"
+            )
         # MERGE on (source, target, type, source_document_id) for idempotent
         # re-ingest while preserving per-document provenance — see the note in
         # create_relationship. LIMIT 1 keeps the read to one row (it does not

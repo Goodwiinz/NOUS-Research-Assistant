@@ -270,3 +270,38 @@ def test_org_scoped_create_relationship_scopes_both_endpoints() -> None:
     assert "source.organization_id = $organization_id" in session.queries[0]
     assert "target.organization_id = $organization_id" in session.queries[0]
     assert session.params[0]["organization_id"] == "org-1"
+
+
+def test_unscoped_batch_relationship_write_is_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Batch ingest with neither org nor source_document_id must not MERGE."""
+    tx = _FakeSession()
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(RelationshipScopeError):
+        KnowledgeGraphService()._create_relationship_in_transaction(tx, _rel_request())
+
+    assert tx.queries == [], "ran an unscoped batch MERGE"
+    assert _fail_closed_logged(caplog, "_create_relationship_in_transaction")
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"organization_id": "org-1"},
+        {"source_document_id": "doc-1"},
+    ],
+)
+def test_scoped_batch_relationship_write_filters_endpoints(
+    scope: dict[str, str],
+) -> None:
+    tx = _FakeSession()
+    request = _rel_request().model_copy(update=scope)
+
+    KnowledgeGraphService()._create_relationship_in_transaction(tx, request)
+
+    assert len(tx.queries) == 1
+    key = next(iter(scope))
+    assert f"source.{key} = ${key}" in tx.queries[0]
+    assert f"target.{key} = ${key}" in tx.queries[0]
