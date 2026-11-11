@@ -2,7 +2,7 @@
 # This Dockerfile can be used to build any of the microservices
 # by setting the SERVICE_NAME build argument
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Set build arguments
 ARG SERVICE_NAME=api-gateway

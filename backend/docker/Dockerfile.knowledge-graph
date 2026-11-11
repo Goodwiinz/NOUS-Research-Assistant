@@ -1,5 +1,5 @@
 # Dockerfile for Knowledge Graph Service (Port 8003)
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
