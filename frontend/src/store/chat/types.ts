@@ -244,11 +244,6 @@ export interface ChatActions {
   clearThread: (threadId: string) => void;
 
   // Streaming actions
-  streamMessage: (
-    content: string,
-    threadId?: string,
-    useRag?: boolean
-  ) => Promise<void>;
   stopStreaming: () => void;
 
   // Utility actions

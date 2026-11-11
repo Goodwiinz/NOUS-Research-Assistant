@@ -4,7 +4,6 @@ Thread and chat services
 
 from . import thread_title_generator
 from .chat_service import ChatService
-from .stream_service import SSEEvent, StreamService
 from .thread_event_service import ThreadEventService
 from .thread_message_search_service import (
     CombinedSearchResponse,
@@ -25,8 +24,6 @@ from .thread_summarization_service import ThreadSummarizationService
 
 __all__ = [
     "ChatService",
-    "SSEEvent",
-    "StreamService",
     "ThreadEventService",
     "ThreadSummarizationService",
     "ThreadMessageSearchService",
