@@ -36,7 +36,9 @@ pytestmark = pytest.mark.unit
 NOW = datetime.now(timezone.utc)
 STALE = NOW - timedelta(hours=1)  # past the 30-min default
 FRESH = NOW - timedelta(minutes=5)
-VERY_STALE = NOW - timedelta(hours=3)  # past the 2h awaiting window
+VERY_STALE = NOW - timedelta(hours=3)
+# Past the 25h awaiting window (R2-H3: the awaiting job record lives 24h).
+AWAITING_EXPIRED = NOW - timedelta(hours=26)
 
 
 # ---------------------------------------------------------------------------
@@ -376,16 +378,23 @@ async def test_awaiting_confirmation_respects_longer_window(session_factory):
     parked_id = await _seed(
         session_factory, status="awaiting_confirmation", updated_at=STALE
     )
-    expired_id = await _seed(
+    parked_long_id = await _seed(
         session_factory, status="awaiting_confirmation", updated_at=VERY_STALE
+    )
+    expired_id = await _seed(
+        session_factory, status="awaiting_confirmation", updated_at=AWAITING_EXPIRED
     )
     p1, p2, p3 = _sweep(session_factory)
     with p1, p2, p3:
         result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
 
-    # 1h-old parked confirm is still confirmable (Redis TTL 1h) → untouched.
+    # 1h- and 3h-old parked confirms are still confirmable (awaiting Redis
+    # TTL 24h, R2-H3) → untouched.
     assert (await _status(session_factory, parked_id))[0] == "awaiting_confirmation"
-    # 3h-old parked confirm can never be confirmed again → swept.
+    assert (await _status(session_factory, parked_long_id))[
+        0
+    ] == "awaiting_confirmation"
+    # 26h-old parked confirm can never be confirmed again → swept.
     assert (await _status(session_factory, expired_id))[0] == "failed"
     assert result["failed"] == 1
 

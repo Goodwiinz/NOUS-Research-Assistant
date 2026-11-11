@@ -803,9 +803,11 @@ class Settings(BaseSettings):
     AGENT_RUN_HEARTBEAT_SECONDS: int = 60
 
     # awaiting_confirmation is a legitimately-parked state — a user may take
-    # a while to confirm. Sweep it only after the Redis job record (TTL 1h)
-    # is guaranteed gone and the confirm can no longer succeed anyway.
-    AGENT_RUN_STALE_AWAITING_AFTER_SECONDS: int = 7200
+    # a while to confirm. Sweep it only after the awaiting Redis job record
+    # (job_store._AWAITING_JOB_TTL_SECONDS, 24h; audit R2-H3) is guaranteed
+    # gone and the confirm can no longer succeed anyway. Must stay strictly
+    # longer than that TTL; 25h leaves an hour of margin.
+    AGENT_RUN_STALE_AWAITING_AFTER_SECONDS: int = 90000
 
     # A non-terminal processing_jobs row with no update for this long is
     # definitively stuck: Celery's hard time limit is 600s, so 30 min of
