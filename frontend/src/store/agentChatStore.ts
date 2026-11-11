@@ -37,8 +37,11 @@ const ACCEPTANCE_FRAME_CALLBACKS = [
 /**
  * A4-AG3: wrap stream callbacks so `onAccepted` fires on the first frame
  * the backend sent for this run. Once a run is accepted, a dropped SSE
- * transport must not start a second durable run from the same payload:
- * the first run is still executing server-side.
+ * transport must not start a second durable run from the same payload.
+ * The backend treats the hang-up as a stop (streaming.py
+ * cancel_current_stream) and persists the partial answer with
+ * stopped=True, so the turn is settled, not still running; re-running it
+ * would duplicate the turn.
  */
 export function trackStreamAcceptance(
   callbacks: AgentStreamCallbacks,
@@ -62,7 +65,7 @@ export function trackStreamAcceptance(
 }
 
 export const STREAM_INTERRUPTED_NOTE =
-  'Connection interrupted — this answer may still finish. Reopen this chat to see it.';
+  'Connection lost — this answer stopped partway. Send your message again to retry.';
 
 const DEFAULT_PAGE_CONTEXT: PageContext = {
   type: 'unknown',
