@@ -219,13 +219,70 @@ export async function setDefaultWorkspaceCache(session, page, workspaceId) {
   }, { keys: WORKSPACE_CACHE_KEYS, value: record });
 }
 
+export const STEP_TIMEOUT_MIN_MS = 1_000;
+export const STEP_TIMEOUT_MAX_MS = 60_000;
+export const STEP_TIMEOUT_RESERVE_MS = 5_000;
+
 /**
- * Inner waits get a fraction of the scenario budget. A wait bounded by the
- * full scenario timeout loses the race to the runner's timeout, which halts
- * the whole campaign instead of failing this scenario with its own message.
+ * Bound for one inner wait, derived from the time left before the runner's
+ * scenario deadline (session.scenarioDeadline, set by runCampaign). A wait
+ * bounded by the full scenario timeout loses the race to the runner's timer,
+ * which halts the whole campaign instead of failing this scenario with its
+ * own message, so a reserve is kept back for the scenario's own assertion and
+ * cleanup. Each wait calls this again, so later waits get what is actually
+ * left rather than a fixed slice. Capped at STEP_TIMEOUT_MAX_MS and floored
+ * (never 0: Playwright reads timeout 0 as "wait forever"). Without a deadline
+ * (a scenario run outside the runner) the full budget counts as remaining.
  */
-export function stepTimeout(session) {
-  return Math.max(1, Math.floor(session.config.timeoutMs / 4));
+export function stepTimeout(session, now = Date.now()) {
+  const budget = session.config.timeoutMs;
+  const deadline = Number.isFinite(session.scenarioDeadline) ? session.scenarioDeadline : now + budget;
+  const reserve = Math.min(STEP_TIMEOUT_RESERVE_MS, Math.floor(budget / 4));
+  const floor = Math.min(STEP_TIMEOUT_MIN_MS, Math.max(1, Math.floor(budget / 4)));
+  return Math.max(floor, Math.min(STEP_TIMEOUT_MAX_MS, deadline - now - reserve));
+}
+
+// The composer's attach control uploads through enhancedDocumentService
+// (frontend/src/services/enhancedDocumentService.ts: POST /files/upload on the
+// v1 API base). The backend (backend/src/api/documents/files.py) rejects a
+// disallowed extension with FileValidationError -> 400 and the allowlisted
+// detail below; every other failure maps to a different status or detail.
+export const ATTACHMENT_UPLOAD_PATH = '/api/v1/files/upload';
+export const UNSUPPORTED_TYPE_STATUS = 400;
+export const UNSUPPORTED_TYPE_DETAIL = 'File type is not allowed';
+
+export function isAttachmentUploadResponse(response) {
+  try {
+    return response.request().method() === 'POST' && new URL(response.url()).pathname === ATTACHMENT_UPLOAD_PATH;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Proves the backend saw the upload and refused it for its type. `outcome`
+ * is `{ response }` from page.waitForResponse or `{ error }` when no matching
+ * response arrived before the step deadline.
+ */
+export async function assertUnsupportedTypeRejection(outcome) {
+  if (!outcome?.response) {
+    throw new Error(`Unsupported attachment produced no POST ${ATTACHMENT_UPLOAD_PATH} response (no upload was attempted, or it failed at the network layer)`);
+  }
+  const status = outcome.response.status();
+  if (status === 401 || status === 403) {
+    throw new Error(`Unsupported attachment upload was refused for authorization (${status}), not for its file type`);
+  }
+  if (status >= 500) {
+    throw new Error(`Unsupported attachment upload failed server-side (${status}) instead of rejecting the file type`);
+  }
+  assertThat(status === UNSUPPORTED_TYPE_STATUS, `Unsupported attachment upload returned ${status}, expected ${UNSUPPORTED_TYPE_STATUS} for a disallowed file type`);
+  const body = await outcome.response.json().catch(() => null);
+  const detail = body?.error?.message ?? body?.detail ?? null;
+  assertThat(
+    detail === UNSUPPORTED_TYPE_DETAIL,
+    `Unsupported attachment upload was rejected for another reason (${typeof detail === 'string' ? detail.slice(0, 120) : 'no detail'}), not as a disallowed file type`
+  );
+  return { status, detail };
 }
 
 async function restoreDefaultWorkspaceCache(page, previous) {
@@ -891,18 +948,18 @@ const scenarios = [
       const secondTitle = `${evidence.fixturePrefix} history-b`;
       const page = await session.login();
       const previousCache = await setDefaultWorkspaceCache(session, page, firstFixture.workspaceId);
-      const waitMs = stepTimeout(session);
+      const waitMs = () => stepTimeout(session);
       try {
         await session.goto(threadUrl(firstFixture.threadId));
         const rows = page.locator('button.sb-conv');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs() });
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs() });
         const search = page.getByLabel('Search threads');
         await search.fill('history-a');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
+        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: waitMs() });
         await waitForCondition(
           async () => (await rows.filter({ hasText: secondTitle }).count()) === 0,
-          waitMs,
+          waitMs(),
           'History search still displayed the other owned conversation'
         );
         assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
@@ -911,12 +968,12 @@ const scenarios = [
         await message.fill(draft);
         assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
         await search.fill('');
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs });
+        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: waitMs() });
         await rows.filter({ hasText: secondTitle }).first().click();
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
             && (await messageComposer(page).inputValue()) !== draft,
-          waitMs,
+          waitMs(),
           'Sidebar switch to history-b did not restore an independent draft'
         );
         assertThat(await messageComposer(page).inputValue() !== draft, 'Draft from history-a leaked into history-b');
@@ -924,7 +981,7 @@ const scenarios = [
         await waitForCondition(
           async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
             && (await messageComposer(page).inputValue()) === draft,
-          waitMs,
+          waitMs(),
           'Sidebar switch back to history-a did not restore its draft'
         );
         assertThat(await messageComposer(page).inputValue() === draft, 'History-a draft was not restored after returning');
@@ -1419,7 +1476,7 @@ const scenarios = [
       assertThat(persistedValues.every((item, index) => item?.role === expectedTranscript[index].role && item?.content === expectedTranscript[index].content), 'Missing-thread fixture transcript did not match its exact expected message');
       const page = await session.login();
       const previousCache = await setDefaultWorkspaceCache(session, page, fixture.workspaceId);
-      const waitMs = stepTimeout(session);
+      const waitMs = () => stepTimeout(session);
       try {
         const response = await session.goto('/chat?thread=00000000-0000-4000-8000-000000000000');
         const path = new URL(session.page.url()).pathname;
@@ -1427,11 +1484,11 @@ const scenarios = [
         assertThat(path.startsWith('/chat'), `Unexpected missing-thread navigation: ${path}`);
         await waitForCondition(
           () => new URL(page.url()).searchParams.get('thread') === fixture.threadId,
-          waitMs,
+          waitMs(),
           'Missing thread did not recover to the explicitly owned workspace fixture'
         );
         const transcript = page.locator('[data-role="user"], [data-role="assistant"]');
-        await transcript.first().waitFor({ state: 'visible', timeout: waitMs });
+        await transcript.first().waitFor({ state: 'visible', timeout: waitMs() });
         const renderedMessages = await transcript.evaluateAll((nodes) => nodes.map((node) => {
           const body = node.querySelector('.nous-chat-body, [data-quotable]');
           return (body?.textContent ?? node.textContent ?? '').trim();
@@ -1472,11 +1529,19 @@ const scenarios = [
     async run(session, evidence) {
       const page = await authenticatedPage(session, '/chat');
       const name = `${evidence.fixturePrefix.replace(/[^A-Za-z0-9_-]/g, '_')}-unsupported.exe`;
+      // Register before attaching so the upload cannot complete unobserved.
+      // Without it a chip that failed for another reason (no workspace yet,
+      // 401, 5xx, network) would read as a type rejection.
+      const upload = page
+        .waitForResponse(isAttachmentUploadResponse, { timeout: stepTimeout(session) })
+        .then((response) => ({ response }), (error) => ({ error }));
       await page.getByLabel('Attach file', { exact: true }).setInputFiles({
         name,
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('MZ'),
       });
+      const uploadOutcome = await upload;
+      const rejection = await assertUnsupportedTypeRejection(uploadOutcome);
       // The composer marks the rejected attachment itself (ChatInput.tsx);
       // an unrelated role=alert elsewhere on the page proves nothing.
       await page.getByLabel(`Upload failed for ${name}`, { exact: true }).waitFor({ state: 'visible', timeout: stepTimeout(session) });
@@ -1487,7 +1552,7 @@ const scenarios = [
         if (UUID.test(String(item?.id))) session.registerFixture('document', String(item.id), { filename: name });
       }
       assertThat(created.length === 0, 'Unsupported attachment created an owned document');
-      return { assertion: 'Unsupported attachment is marked failed on its chip and creates no document', evidence: ['Attach file', `Upload failed for ${name}`, { documentsWithName: 0 }] };
+      return { assertion: 'Unsupported attachment upload is rejected as a disallowed type, marked failed on its chip and creates no document', evidence: ['Attach file', { upload: `POST ${ATTACHMENT_UPLOAD_PATH}`, ...rejection }, `Upload failed for ${name}`, { documentsWithName: 0 }] };
     },
   },
   {

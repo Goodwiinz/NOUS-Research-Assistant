@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity, sanitizeAssertionEvidence } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { WORKSPACE_CACHE_VERSION, assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, setDefaultWorkspaceCache, smokeLogin, stepTimeout } from '../../../tests/e2e/qa/scenarios.mjs';
+import { ATTACHMENT_UPLOAD_PATH, STEP_TIMEOUT_MAX_MS, STEP_TIMEOUT_MIN_MS, WORKSPACE_CACHE_VERSION, assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, setDefaultWorkspaceCache, smokeLogin, stepTimeout } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -1442,6 +1443,58 @@ test('scenario inner waits are bounded below the scenario timeout', () => {
   assert.equal(stepTimeout({ config: { timeoutMs: 1 } }), 1);
 });
 
+test('inner waits use the time left before the scenario deadline, not a fixed slice', () => {
+  const now = 1_000_000;
+  const session = { config: { timeoutMs: 30_000 }, scenarioDeadline: now + 30_000 };
+  // Fresh scenario: everything but the 5 s reserve for its own assertion/cleanup.
+  assert.equal(stepTimeout(session, now), 25_000);
+  // Later waits shrink with the budget actually left.
+  assert.equal(stepTimeout(session, now + 20_000), 5_000);
+  // Past the reserve: floored, never 0 (Playwright treats 0 as no timeout).
+  assert.equal(stepTimeout(session, now + 29_000), STEP_TIMEOUT_MIN_MS);
+  assert.equal(stepTimeout(session, now + 60_000), STEP_TIMEOUT_MIN_MS);
+  // A long budget is capped.
+  assert.equal(stepTimeout({ config: { timeoutMs: 300_000 }, scenarioDeadline: now + 300_000 }, now), STEP_TIMEOUT_MAX_MS);
+  // Without a runner deadline the whole budget counts as remaining.
+  assert.equal(stepTimeout({ config: { timeoutMs: 30_000 } }, now), 25_000);
+});
+
+test('the runner stamps each scenario with its own deadline before running it', async () => {
+  const seen = [];
+  const registry = ['smoke.d1', 'smoke.d2'].map((id) => ({
+    id, title: id, suite: 'smoke', prerequisites: [],
+    async run(session) {
+      seen.push({ deadline: session.scenarioDeadline, now: Date.now(), wait: stepTimeout(session) });
+      return { assertion: 'ok' };
+    },
+  }));
+  const session = {
+    config: { timeoutMs: 30_000 },
+    observations: [],
+    cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
+    close: async () => {},
+  };
+  const report = await runCampaign(
+    { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1', timeoutMs: 30_000 },
+    { sessionFactory: async () => session, registry },
+  );
+  assert.deepEqual(report.cases.map((item) => item.status), ['PASS', 'PASS']);
+  for (const item of seen) {
+    const left = item.deadline - item.now;
+    assert.ok(left > 29_000 && left <= 30_000, `deadline is the scenario timeout from its start (${left})`);
+    assert.ok(item.wait <= left - 5_000 && item.wait >= 24_000, `inner wait fits the remaining budget (${item.wait})`);
+  }
+  assert.ok(seen[1].deadline >= seen[0].deadline, 'each scenario gets a fresh deadline');
+});
+
+test('WORKSPACE_CACHE_VERSION matches workspaceService.ts WS_CACHE_VERSION', async () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const source = await readFile(join(repoRoot, 'frontend', 'src', 'services', 'workspaceService.ts'), 'utf8');
+  const match = source.match(/^const WS_CACHE_VERSION\s*=\s*(\d+)\s*;/m);
+  assert.ok(match, 'workspaceService.ts no longer declares `const WS_CACHE_VERSION = <n>;` - update this test and the QA mirror together');
+  assert.equal(WORKSPACE_CACHE_VERSION, Number(match[1]), 'tests/e2e/qa/scenarios.mjs WORKSPACE_CACHE_VERSION drifted from the frontend cache version');
+});
+
 function exportSession(exportText) {
   const ids = ['81818181-8181-4181-8181-818181818181', '92929292-9292-4292-8292-929292929292', 'a3a3a3a3-a3a3-43a3-83a3-a3a3a3a3a3a3'];
   let index = 0;
@@ -1472,16 +1525,44 @@ test('markdown export fails when only the thread title carries the fixture prefi
   assert.match(result.assertion, /message body/);
 });
 
-function attachmentSession({ chipShown, documents, unrelatedAlert = true }) {
+const UNSUPPORTED_TYPE_BODY = { error: { message: 'File type is not allowed', status_code: 400, type: 'http_error' } };
+
+// `upload` is what the composer's POST /api/v1/files/upload produced:
+// { status, body } for a response, or null when no upload request was made.
+function attachmentSession({ chipShown, documents, unrelatedAlert = true, upload = { status: 400, body: UNSUPPORTED_TYPE_BODY } }) {
   const registered = [];
+  const order = [];
   let attachedName = null;
+  let pendingUpload = null;
   const page = {
     url: () => 'http://127.0.0.1:3000/chat',
     getByRole: (role) => ({
       last: () => ({ waitFor: async () => { if (!(role === 'alert' && unrelatedAlert)) throw new Error('no alert'); } }),
     }),
+    waitForResponse: (predicate) => {
+      order.push('waitForResponse');
+      return new Promise((resolve, reject) => { pendingUpload = { predicate, resolve, reject }; });
+    },
     getByLabel: (label) => ({
-      setInputFiles: async (file) => { attachedName = file.name; },
+      setInputFiles: async (file) => {
+        order.push('setInputFiles');
+        attachedName = file.name;
+        if (!pendingUpload) return;
+        if (upload === null) {
+          pendingUpload.reject(new Error('page.waitForResponse: Timeout 10ms exceeded.'));
+          return;
+        }
+        const response = {
+          url: () => `http://127.0.0.1:8000${ATTACHMENT_UPLOAD_PATH}`,
+          request: () => ({ method: () => 'POST' }),
+          status: () => upload.status,
+          json: async () => upload.body,
+        };
+        const decoy = { url: () => 'http://127.0.0.1:8000/api/v1/documents', request: () => ({ method: () => 'GET' }) };
+        assert.equal(pendingUpload.predicate(decoy), false, 'only the upload request counts');
+        assert.equal(pendingUpload.predicate(response), true, 'the composer upload request is matched');
+        pendingUpload.resolve(response);
+      },
       waitFor: async () => {
         if (!(chipShown && label === `Upload failed for ${attachedName}`)) throw new Error('synthetic locator timeout');
       },
@@ -1489,6 +1570,7 @@ function attachmentSession({ chipShown, documents, unrelatedAlert = true }) {
   };
   return {
     registered,
+    order,
     config: { timeoutMs: 40 },
     page,
     login: async () => {},
@@ -1509,9 +1591,29 @@ test('unsupported attachment needs its own failed chip, not any alert', async ()
     () => scenario.run(attachmentSession({ chipShown: false, documents: () => [] }), evidence),
     /synthetic locator timeout/
   );
-  const result = await scenario.run(attachmentSession({ chipShown: true, documents: () => [] }), evidence);
+  const session = attachmentSession({ chipShown: true, documents: () => [] });
+  const result = await scenario.run(session, evidence);
+  assert.match(result.assertion, /rejected as a disallowed type/);
   assert.match(result.assertion, /creates no document/);
+  assert.deepEqual(session.order, ['waitForResponse', 'setInputFiles'], 'the upload response is awaited from before the attach');
+  assert.deepEqual(result.evidence[1], { upload: `POST ${ATTACHMENT_UPLOAD_PATH}`, status: 400, detail: 'File type is not allowed' });
 });
+
+for (const [label, upload, pattern] of [
+  ['no upload request was made', null, /produced no POST \/api\/v1\/files\/upload response/],
+  ['the upload was unauthenticated (401)', { status: 401, body: { error: { message: 'Not authenticated' } } }, /refused for authorization \(401\)/],
+  ['the upload failed server-side (500)', { status: 500, body: { error: { message: 'Internal Server Error' } } }, /failed server-side \(500\)/],
+  ['the upload was refused with another 4xx (413)', { status: 413, body: { error: { message: 'Insufficient storage quota' } } }, /returned 413, expected 400/],
+  ['the 400 was a generic upload failure, not a type rejection', { status: 400, body: { error: { message: 'File upload failed' } } }, /rejected for another reason \(File upload failed\)/],
+]) {
+  test(`unsupported attachment fails when ${label}, even with a failed chip and no document`, async () => {
+    const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+    await assert.rejects(
+      () => scenario.run(attachmentSession({ chipShown: true, documents: () => [], upload }), { fixturePrefix: 'NOUS QA run-4' }),
+      pattern
+    );
+  });
+}
 
 test('unsupported attachment fails when a document was created anyway', async () => {
   const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');

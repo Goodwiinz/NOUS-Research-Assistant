@@ -440,6 +440,10 @@ export async function runCampaign(config, options = {}) {
         // before a request that could be accepted by the model service.
         evidence.consumeModelTurn = evidence.reserveModelTurn;
         const modelTurnsAtStart = modelTurns;
+        // Scenarios size their inner waits from the time left before this
+        // deadline (scenarios.mjs stepTimeout), so a miss fails the scenario
+        // with its own message before the timer below halts the campaign.
+        if (session && typeof session === 'object') session.scenarioDeadline = Date.now() + normalizedConfig.timeoutMs;
         const result = await runWithTimeout(
           () => scenario.run(session, evidence),
           normalizedConfig.timeoutMs,
