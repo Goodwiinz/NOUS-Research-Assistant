@@ -38,7 +38,9 @@ vi.mock('@/services/agentChatService', async (importOriginal) => {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function lastUserTurn(request: AgentExecuteRequest) {
+function lastUserTurn(
+  request: AgentExecuteRequest
+): AgentExecuteRequest['messages'][number] | undefined {
   return [...request.messages].reverse().find((m) => m.role === 'user');
 }
 
