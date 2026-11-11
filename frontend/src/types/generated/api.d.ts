@@ -10019,10 +10019,10 @@ export interface paths {
          *
          *     CANONICAL create-message route (audit finding C4). This flat
          *     ``POST /api/v2/messages`` is the only create-message route any client calls
-         *     (frontend ``workspaceService.createMessage``); the two nested variants
-         *     (``POST /api/v2/threads/{thread_id}/messages`` and
-         *     ``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated
-         *     and awaiting removal. Route new clients here.
+         *     (frontend ``workspaceService.createMessage``). The two nested POST variants
+         *     (``/api/v2/threads/{thread_id}/messages`` and
+         *     ``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and
+         *     now answer 405.
          */
         post: operations["create_message_standalone_api_v2_messages_post"];
         delete?: never;

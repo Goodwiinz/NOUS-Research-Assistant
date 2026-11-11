@@ -7,8 +7,9 @@ Task 4.3 moved the read/update/delete persistence logic into
 request commit UP to the update/delete handlers — the message service flushes,
 those handlers end with one ``await db.commit()``.
 
-``create_message``/``create_message_standalone`` are unchanged and deliberately
-issue NO route commit: they delegate to the canonical
+``create_message_standalone`` (``POST /api/v2/messages``, the only
+create-message route; the nested POST variants were removed, audit finding
+C4) deliberately issues NO route commit: it delegates to the canonical
 ``ChatService.create_message`` (consolidated in #1051, audit finding C4), which
 is a DIRECT transaction owner (commits internally, out of scope for this task).
 Adding a route commit there would double-commit. The read-only ``select(...)``
@@ -246,10 +247,10 @@ async def create_message_standalone(
 
     CANONICAL create-message route (audit finding C4). This flat
     ``POST /api/v2/messages`` is the only create-message route any client calls
-    (frontend ``workspaceService.createMessage``); the two nested variants
-    (``POST /api/v2/threads/{thread_id}/messages`` and
-    ``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated
-    and awaiting removal. Route new clients here.
+    (frontend ``workspaceService.createMessage``). The two nested POST variants
+    (``/api/v2/threads/{thread_id}/messages`` and
+    ``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and
+    now answer 405.
     """
     # Delegate to the canonical ChatService.create_message. This route used to
     # reimplement it and drifted: it accepted but silently discarded

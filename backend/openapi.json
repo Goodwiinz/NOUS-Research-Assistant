@@ -64748,7 +64748,7 @@
     },
     "/api/v2/messages": {
       "post": {
-        "description": "Create a new message (standalone route - uses thread_id from request body).\n\nCANONICAL create-message route (audit finding C4). This flat\n``POST /api/v2/messages`` is the only create-message route any client calls\n(frontend ``workspaceService.createMessage``); the two nested variants\n(``POST /api/v2/threads/{thread_id}/messages`` and\n``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated\nand awaiting removal. Route new clients here.",
+        "description": "Create a new message (standalone route - uses thread_id from request body).\n\nCANONICAL create-message route (audit finding C4). This flat\n``POST /api/v2/messages`` is the only create-message route any client calls\n(frontend ``workspaceService.createMessage``). The two nested POST variants\n(``/api/v2/threads/{thread_id}/messages`` and\n``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and\nnow answer 405.",
         "operationId": "create_message_standalone_api_v2_messages_post",
         "requestBody": {
           "content": {
