@@ -81,6 +81,8 @@ jobs:
             python3 -m venv .venv
           fi
           .venv/bin/pip install -q -r requirements.txt
+          # Same pin as requirements-test.txt; the sweep reruns live cases once.
+          .venv/bin/pip install -q "pytest-rerunfailures==16.7"
 
       # Regenerate the remote dataset from golden_examples.py EVERY run so it
       # can never drift (upsert + delete orphans). This is what prevents the
@@ -102,8 +104,16 @@ jobs:
         # for the committed replay cassettes — if a cassette no longer matches
         # live model behavior, this job goes red. (Per-PR the golden cases run
         # creds-free via AGENT_GOLDEN_REPLAY in test-pipeline.yml.)
+        #
+        # --reruns 1: these cases call the live model, which is not
+        # deterministic. From 2026-09-07 to 2026-11-09 the job failed 9 of 10
+        # weeks, each time on 1-2 of 26 cases, and a DIFFERENT case most
+        # weeks (writing_summarize, ingest_arxiv_id_only, retry_after_failed_search,
+        # the dataset sweep). A red that never clears is ignored. One rerun keeps
+        # a real regression red (it fails twice) while one-off sampling noise
+        # passes; pytest still reports every rerun in the log.
         run: |
-          .venv/bin/pytest -m "langsmith or golden" tests/eval/test_agent_regression.py -v --tb=short
+          .venv/bin/pytest -m "langsmith or golden" tests/eval/test_agent_regression.py -v --tb=short --reruns 1
 
       - name: Summary on failure
         if: failure()
