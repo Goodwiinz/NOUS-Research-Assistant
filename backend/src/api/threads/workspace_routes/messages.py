@@ -7,8 +7,9 @@ Task 4.3 moved the read/update/delete persistence logic into
 request commit UP to the update/delete handlers — the message service flushes,
 those handlers end with one ``await db.commit()``.
 
-``create_message``/``create_message_standalone`` are unchanged and deliberately
-issue NO route commit: they delegate to the canonical
+``create_message_standalone`` (``POST /api/v2/messages``, the only
+create-message route; the nested POST variants were removed, audit finding
+C4) deliberately issues NO route commit: it delegates to the canonical
 ``ChatService.create_message`` (consolidated in #1051, audit finding C4), which
 is a DIRECT transaction owner (commits internally, out of scope for this task).
 Adding a route commit there would double-commit. The read-only ``select(...)``
@@ -41,7 +42,6 @@ from src.services.threads import message_service, workspace_access
 from src.services.threads.branch_reads import MessagePageMetadata
 from src.services.threads.message_branches import BranchAccessError
 
-from .dependencies import _get_thread_or_404
 from .presenters import _message_to_response
 
 logger = logging.getLogger(__name__)
@@ -54,94 +54,6 @@ standalone_router = APIRouter(prefix="/api/v2", tags=["workspaces-flat"])
 # ============================================================================
 # Message Endpoints
 # ============================================================================
-
-
-@router.post(
-    "/{workspace_id}/conversations/{conversation_id}/threads/{thread_id}/messages",
-    response_model=ChatMessageResponse,
-    status_code=status.HTTP_201_CREATED,
-    deprecated=True,
-)
-async def create_message(
-    workspace_id: UUID,
-    conversation_id: UUID,
-    thread_id: UUID,
-    request: ChatMessageCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> ChatMessageResponse:
-    """[DEPRECATED] Create a new message in a thread.
-
-    Audit finding C4: three public POST create-message routes coexist but only
-    the flat ``POST /api/v2/messages`` (``create_message_standalone`` below) is
-    called by any client — it is the canonical route. This deeply-nested
-    workspace variant has no live callers (frontend, CLI, scripts, or synthetic
-    traffic); it already delegates to ``ChatService.create_message`` and is kept
-    only for a deprecation window. New clients MUST use ``POST /api/v2/messages``
-    with ``thread_id`` in the body. Slated for removal in a follow-up cleanup PR
-    once the window closes.
-
-    See ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible
-    date and criteria.
-    """
-    # Validate the path hierarchy (workspace/conversation/thread + soft-delete
-    # filters) before delegating; the 403 for non-editors is this route's
-    # documented behavior.
-    thread = await _get_thread_or_404(
-        db, workspace_id, conversation_id, thread_id, current_user
-    )
-
-    if not thread.conversation.workspace.can_user_edit(str(current_user.id)):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    # Delegate to the canonical ChatService.create_message. This route used to
-    # reimplement it and drifted (same as the v2 standalone route, fixed in
-    # #1051): it accepted but silently discarded latency_ms, stopped, and
-    # attachment_ids, skipped token accounting, and lacked the org-ownership
-    # guard on attachments. The path thread_id is authoritative — this route
-    # always wrote to it and ignored any body thread_id.
-    from src.services.threads.chat_service import get_chat_service
-
-    request.thread_id = thread_id
-    service = get_chat_service(db)
-    message = await service.create_message(request, current_user.id)
-    if not message:
-        raise HTTPException(
-            status_code=404, detail="Thread not found or insufficient permissions"
-        )
-
-    # Re-query with eager loading to get citations with document info.
-    # Deliberately NOT filtered on ``superseded_by_message_id``: this reads back
-    # the row just created, by id.
-    stmt = (
-        select(ChatMessage)
-        .options(
-            # load_only: the message responses render only title/type/mime of a
-            # cited/attached Document — never content_text/content_summary/
-            # search_vector (the heavy extracted body). Loading only the 3 read
-            # columns keeps content_text off the wire on every paged fetch.
-            selectinload(ChatMessage.citations)
-            .selectinload(Citation.document)
-            .load_only(Document.title, Document.document_type, Document.mime_type),
-            selectinload(ChatMessage.attachments)
-            .selectinload(MessageAttachment.document)
-            .load_only(Document.title, Document.document_type, Document.mime_type),
-        )
-        .where(ChatMessage.id == message.id)
-    )
-    result = await db.execute(stmt)
-    message = result.scalars().first()
-    if message is None:
-        raise HTTPException(
-            status_code=404, detail="Thread not found or insufficient permissions"
-        )
-
-    # The row was re-queried without its thread; the path thread (already
-    # access-checked above) carries the viewer's workspace trust.
-    return _message_to_response(
-        message,
-        trusted=workspace_access.thread_viewer_is_trusted(thread, current_user.id),
-    )
 
 
 @router.get(
@@ -335,10 +247,10 @@ async def create_message_standalone(
 
     CANONICAL create-message route (audit finding C4). This flat
     ``POST /api/v2/messages`` is the only create-message route any client calls
-    (frontend ``workspaceService.createMessage``); the two nested variants
-    (``POST /api/v2/threads/{thread_id}/messages`` and
-    ``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated
-    and awaiting removal. Route new clients here.
+    (frontend ``workspaceService.createMessage``). The two nested POST variants
+    (``/api/v2/threads/{thread_id}/messages`` and
+    ``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and
+    now answer 405.
     """
     # Delegate to the canonical ChatService.create_message. This route used to
     # reimplement it and drifted: it accepted but silently discarded

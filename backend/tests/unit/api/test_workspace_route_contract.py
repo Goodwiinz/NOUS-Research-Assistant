@@ -133,13 +133,6 @@ NESTED_ROUTES = [
         False,
     ),
     (
-        "POST",
-        "/{workspace_id}/conversations/{conversation_id}/threads/{thread_id}/messages",
-        ChatMessageResponse,
-        201,
-        True,  # audit C4: only public POST create-message route not called by any client
-    ),
-    (
         "GET",
         "/{workspace_id}/conversations/{conversation_id}/threads/{thread_id}/messages",
         ChatMessageListResponse,
@@ -268,7 +261,7 @@ def _expected_table(
 
 
 def test_nested_router_route_count_unchanged() -> None:
-    assert len(workspaces_router.routes) == len(NESTED_ROUTES) == 29
+    assert len(workspaces_router.routes) == len(NESTED_ROUTES) == 28
 
 
 def test_nested_router_contract_unchanged() -> None:
@@ -295,9 +288,9 @@ def test_standalone_router_prefix_and_tags_unchanged() -> None:
     assert workspaces_standalone_router.tags == ["workspaces-flat"]
 
 
-def test_total_endpoint_count_is_50() -> None:
+def test_total_endpoint_count_is_49() -> None:
     total = len(workspaces_router.routes) + len(workspaces_standalone_router.routes)
-    assert total == 50
+    assert total == 49
 
 
 def test_module_level_constant_unchanged() -> None:
@@ -306,24 +299,17 @@ def test_module_level_constant_unchanged() -> None:
     assert THREAD_PREVIEW_MAX_CHARS == 240
 
 
-def test_nested_create_message_is_the_only_deprecated_route() -> None:
-    """Audit C4: exactly one route in either router is deprecated — the
-    deeply-nested workspace create-message route. Canonical assertion lives in
-    ``test_create_message_route_deprecation.py``; repeated here as part of the
-    full table, not a second source of truth."""
+def test_no_route_is_deprecated_after_c4_removal() -> None:
+    """Audit C4: the deprecated nested create-message route was removed after
+    its window (``test_create_message_route_deprecation.py``); nothing in
+    either router is left deprecated."""
     deprecated = [
         (route.path, sorted(route.methods - {"HEAD"}))
         for router in (workspaces_router, workspaces_standalone_router)
         for route in router.routes
         if route.deprecated
     ]
-    assert deprecated == [
-        (
-            "/api/v2/workspaces/{workspace_id}/conversations/{conversation_id}"
-            "/threads/{thread_id}/messages",
-            ["POST"],
-        )
-    ]
+    assert deprecated == []
 
 
 def test_threads_router_registered_before_workspaces_standalone_router() -> None:

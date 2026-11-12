@@ -711,7 +711,6 @@ Conversation management hierarchy: Workspaces → Conversations → Threads → 
 | `POST` | `/threads/{id}/archive` | Archive thread |
 | `POST` | `/threads/{id}/summarize` | AI summarize |
 | `GET` | `/threads/{id}/context` | Thread context |
-| `POST` | `/threads/{id}/messages` | Add message |
 | `GET` | `/threads/{id}/messages` | List messages |
 | `GET` | `/threads/{id}/messages/{mid}` | Get message |
 | `PATCH` | `/threads/{id}/messages/{mid}` | Update message |

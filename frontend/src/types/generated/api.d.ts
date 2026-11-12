@@ -10019,10 +10019,10 @@ export interface paths {
          *
          *     CANONICAL create-message route (audit finding C4). This flat
          *     ``POST /api/v2/messages`` is the only create-message route any client calls
-         *     (frontend ``workspaceService.createMessage``); the two nested variants
-         *     (``POST /api/v2/threads/{thread_id}/messages`` and
-         *     ``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated
-         *     and awaiting removal. Route new clients here.
+         *     (frontend ``workspaceService.createMessage``). The two nested POST variants
+         *     (``/api/v2/threads/{thread_id}/messages`` and
+         *     ``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and
+         *     now answer 405.
          */
         post: operations["create_message_standalone_api_v2_messages_post"];
         delete?: never;
@@ -10683,23 +10683,7 @@ export interface paths {
          */
         get: operations["list_messages_standalone_api_v2_threads__thread_id__messages_get"];
         put?: never;
-        /**
-         * Create Message
-         * @deprecated
-         * @description [DEPRECATED] Create a new message in a thread.
-         *
-         *     Audit finding C4: three public POST create-message routes coexist but only
-         *     the flat ``POST /api/v2/messages`` (``create_message_standalone`` in
-         *     ``api/threads/workspaces.py``) is called by any client — it is the
-         *     canonical route. This nested variant has no live callers (frontend, CLI,
-         *     scripts, or synthetic traffic) and is kept only for a deprecation window.
-         *     New clients MUST use ``POST /api/v2/messages`` with ``thread_id`` in the
-         *     body. Slated for removal in a follow-up cleanup PR once the window closes.
-         *
-         *     See ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible
-         *     date and criteria.
-         */
-        post: operations["create_message_api_v2_threads__thread_id__messages_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -11046,24 +11030,7 @@ export interface paths {
          */
         get: operations["list_messages_api_v2_workspaces__workspace_id__conversations__conversation_id__threads__thread_id__messages_get"];
         put?: never;
-        /**
-         * Create Message
-         * @deprecated
-         * @description [DEPRECATED] Create a new message in a thread.
-         *
-         *     Audit finding C4: three public POST create-message routes coexist but only
-         *     the flat ``POST /api/v2/messages`` (``create_message_standalone`` below) is
-         *     called by any client — it is the canonical route. This deeply-nested
-         *     workspace variant has no live callers (frontend, CLI, scripts, or synthetic
-         *     traffic); it already delegates to ``ChatService.create_message`` and is kept
-         *     only for a deprecation window. New clients MUST use ``POST /api/v2/messages``
-         *     with ``thread_id`` in the body. Slated for removal in a follow-up cleanup PR
-         *     once the window closes.
-         *
-         *     See ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible
-         *     date and criteria.
-         */
-        post: operations["create_message_api_v2_workspaces__workspace_id__conversations__conversation_id__threads__thread_id__messages_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -45009,41 +44976,6 @@ export interface operations {
             };
         };
     };
-    create_message_api_v2_threads__thread_id__messages_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                thread_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatMessageCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChatMessageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_message_api_v2_threads__thread_id__messages__message_id__get: {
         parameters: {
             query?: never;
@@ -46005,43 +45937,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatMessageListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_message_api_v2_workspaces__workspace_id__conversations__conversation_id__threads__thread_id__messages_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace_id: string;
-                conversation_id: string;
-                thread_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatMessageCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChatMessageResponse"];
                 };
             };
             /** @description Validation Error */

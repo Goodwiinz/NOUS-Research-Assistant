@@ -64748,7 +64748,7 @@
     },
     "/api/v2/messages": {
       "post": {
-        "description": "Create a new message (standalone route - uses thread_id from request body).\n\nCANONICAL create-message route (audit finding C4). This flat\n``POST /api/v2/messages`` is the only create-message route any client calls\n(frontend ``workspaceService.createMessage``); the two nested variants\n(``POST /api/v2/threads/{thread_id}/messages`` and\n``POST /api/v2/workspaces/.../threads/{thread_id}/messages``) are deprecated\nand awaiting removal. Route new clients here.",
+        "description": "Create a new message (standalone route - uses thread_id from request body).\n\nCANONICAL create-message route (audit finding C4). This flat\n``POST /api/v2/messages`` is the only create-message route any client calls\n(frontend ``workspaceService.createMessage``). The two nested POST variants\n(``/api/v2/threads/{thread_id}/messages`` and\n``/api/v2/workspaces/.../threads/{thread_id}/messages``) were removed and\nnow answer 405.",
         "operationId": "create_message_standalone_api_v2_messages_post",
         "requestBody": {
           "content": {
@@ -66997,64 +66997,6 @@
         "tags": [
           "workspaces-flat"
         ]
-      },
-      "post": {
-        "deprecated": true,
-        "description": "[DEPRECATED] Create a new message in a thread.\n\nAudit finding C4: three public POST create-message routes coexist but only\nthe flat ``POST /api/v2/messages`` (``create_message_standalone`` in\n``api/threads/workspaces.py``) is called by any client — it is the\ncanonical route. This nested variant has no live callers (frontend, CLI,\nscripts, or synthetic traffic) and is kept only for a deprecation window.\nNew clients MUST use ``POST /api/v2/messages`` with ``thread_id`` in the\nbody. Slated for removal in a follow-up cleanup PR once the window closes.\n\nSee ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible\ndate and criteria.",
-        "operationId": "create_message_api_v2_threads__thread_id__messages_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "thread_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Thread Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatMessageCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatMessageResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Message",
-        "tags": [
-          "Threads"
-        ]
       }
     },
     "/api/v2/threads/{thread_id}/messages/{message_id}": {
@@ -68894,84 +68836,6 @@
           }
         ],
         "summary": "List Messages",
-        "tags": [
-          "workspaces"
-        ]
-      },
-      "post": {
-        "deprecated": true,
-        "description": "[DEPRECATED] Create a new message in a thread.\n\nAudit finding C4: three public POST create-message routes coexist but only\nthe flat ``POST /api/v2/messages`` (``create_message_standalone`` below) is\ncalled by any client — it is the canonical route. This deeply-nested\nworkspace variant has no live callers (frontend, CLI, scripts, or synthetic\ntraffic); it already delegates to ``ChatService.create_message`` and is kept\nonly for a deprecation window. New clients MUST use ``POST /api/v2/messages``\nwith ``thread_id`` in the body. Slated for removal in a follow-up cleanup PR\nonce the window closes.\n\nSee ``docs/decisions/api-deprecation-window.md`` for the deletion-eligible\ndate and criteria.",
-        "operationId": "create_message_api_v2_workspaces__workspace_id__conversations__conversation_id__threads__thread_id__messages_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "workspace_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Workspace Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "thread_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Thread Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatMessageCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatMessageResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Message",
         "tags": [
           "workspaces"
         ]
