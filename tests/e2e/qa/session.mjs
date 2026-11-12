@@ -239,6 +239,8 @@ async function readBoundedBody(response, maxBytes) {
 export class QASession {
   constructor(config, dependencies = {}) {
     this.config = config;
+    // Epoch ms when the runner's timeout for the current scenario fires.
+    this.scenarioDeadline = null;
     this.secrets = Array.isArray(config.secrets) ? config.secrets : [];
     this.ledger = new FixtureLedger(config.runId);
     this.observations = [];

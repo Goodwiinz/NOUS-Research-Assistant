@@ -16,7 +16,7 @@ import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { BrowserUnavailableError, QASession } from '../../../tests/e2e/qa/session.mjs';
 import { runCampaign } from '../../../tests/e2e/qa/runner.mjs';
 import { renderEvidenceReadme, writeEvidenceRecord } from '../../../tests/e2e/qa/evidence.mjs';
-import { registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
+import { ATTACHMENT_UPLOAD_PATH, STEP_TIMEOUT_MIN_MS, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 
 const MAP = `
 version: 1
@@ -760,8 +760,10 @@ test('--features with an explicit non-all --suite is a configuration error', asy
 // Minimal fake browser + API for the model journeys. Transcript rows are
 // { role, text }; locator('[data-role=...]').filter({ hasText }) only matches
 // rows of the listed roles, so role filtering is actually exercised.
-function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => [] } = {}) {
-  const state = { transcript: [], dialogVisible: false, registered: [], decision: null };
+// `upload` is the composer's POST /api/v1/files/upload result ({ status, body },
+// or null for no request); `deadlineInMs` sets the runner's scenario deadline.
+function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => [], upload = null, deadlineInMs = null } = {}) {
+  const state = { transcript: [], dialogVisible: false, registered: [], decision: null, attached: null, uploadWaitMs: null };
   const roleLocator = (selector) => {
     const roles = [...selector.matchAll(/data-role="([a-z]+)"/g)].map((match) => match[1]);
     return {
@@ -780,6 +782,23 @@ function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => 
     evaluate: async () => ({}),
     reload: async () => {},
     locator: roleLocator,
+    waitForResponse: async (predicate, { timeout } = {}) => {
+      state.uploadWaitMs = timeout;
+      // Resolves only once the attach has run, like the real response event.
+      await new Promise((resolve) => setImmediate(resolve));
+      const response = upload && {
+        url: () => `http://127.0.0.1:8000${ATTACHMENT_UPLOAD_PATH}`,
+        request: () => ({ method: () => 'POST' }),
+        status: () => upload.status,
+        json: async () => upload.body,
+      };
+      if (!state.attached || !response || !predicate(response)) throw new Error(`page.waitForResponse: Timeout ${timeout}ms exceeded.`);
+      return response;
+    },
+    getByLabel: (label) => ({
+      setInputFiles: async (file) => { state.attached = file.name; },
+      waitFor: async () => { if (label !== `Upload failed for ${state.attached}`) throw new Error(`no ${label}`); },
+    }),
     getByRole: (role, options = {}) => {
       if (role === 'textbox') return { fill: async (value) => { draft = value; } };
       // The live /chat composer's Send button has no aria-label; its
@@ -808,20 +827,56 @@ function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => 
   const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
   const session = {
     config: { timeoutMs: 50 },
+    scenarioDeadline: deadlineInMs === null ? null : Date.now() + deadlineInMs,
     page,
     login: async () => page,
     goto: async () => {},
+    assertTrustedBrowserUrl: () => {},
     registerFixture: (kind, fixtureId) => state.registered.push([kind, fixtureId]),
     request: async (path, options = {}) => {
       if (options.method === 'POST') return { status: 201, data: { id: id() } };
       if (path.startsWith('/api/v1/projects')) return { status: 200, data: { projects: projects(state) } };
+      // Account-stamped workspace selection (setDefaultWorkspaceCache).
+      if (path === '/api/v1/auth/me') return { status: 200, data: { user: { id: '00000000-0000-4000-8000-0000000000ff' } } };
+      if (path.startsWith('/api/v2/workspaces/')) return { status: 200, data: { id: decodeURIComponent(path.split('/').pop()) } };
       if (path.includes('/messages')) return { status: 200, data: { messages: messages(state) } };
+      if (path.startsWith('/api/v1/documents?search=')) return { status: 200, data: { documents: [] } };
       throw new Error(`unexpected request ${path}`);
     },
   };
   const evidence = { fixturePrefix: 'NOUS QA t1', consumeModelTurn: () => 1, checkpoint: async () => {} };
   return { state, session, evidence };
 }
+
+const TYPE_REJECTED = { status: 400, body: { error: { message: 'File type is not allowed', status_code: 400, type: 'http_error' } } };
+
+for (const [label, upload, outcome] of [
+  ['the 400 type rejection passes', TYPE_REJECTED, null],
+  ['a 500 fails', { status: 500, body: { error: { message: 'Internal Server Error' } } }, /failed server-side \(500\)/],
+  ['a 401 fails', { status: 401, body: { error: { message: 'Not authenticated' } } }, /refused for authorization \(401\)/],
+  ['no upload request fails', null, /produced no POST \/api\/v1\/files\/upload response/],
+]) {
+  test(`unsupported attachment journey: ${label}`, async () => {
+    const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+    const { session, evidence } = fakeJourney({ upload });
+    if (outcome === null) {
+      const result = await scenario.run(session, evidence);
+      assert.match(result.assertion, /rejected as a disallowed type/);
+    } else {
+      await assert.rejects(() => scenario.run(session, evidence), outcome);
+    }
+  });
+}
+
+test('the upload wait is sized from the remaining scenario budget', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const fresh = fakeJourney({ upload: TYPE_REJECTED, deadlineInMs: 50 });
+  await scenario.run(fresh.session, fresh.evidence);
+  assert.ok(fresh.state.uploadWaitMs > 0 && fresh.state.uploadWaitMs <= 50 - 12, `fresh budget minus reserve (${fresh.state.uploadWaitMs})`);
+  const spent = fakeJourney({ upload: TYPE_REJECTED, deadlineInMs: -1_000 });
+  await scenario.run(spent.session, spent.evidence);
+  assert.equal(spent.state.uploadWaitMs, Math.min(STEP_TIMEOUT_MIN_MS, Math.floor(50 / 4)), 'an exhausted budget is floored, never 0');
+});
 
 test('chat send only accepts the token from an assistant row, not the echoed prompt', async () => {
   const scenario = registry.find((item) => item.id === 'workflow.chat-send-stream-reload');
