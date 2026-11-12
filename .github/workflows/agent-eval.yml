@@ -21,6 +21,17 @@ jobs:
   eval:
     runs-on: [self-hosted, linux]
     timeout-minutes: 30
+    # Redis is only a cache for the eval. The old EVAL_REDIS_URL pointed at a
+    # DigitalOcean Valkey that stopped resolving (Error -2 on every cache call in
+    # run 42642270609). A throwaway container per run needs no secret, starts
+    # empty every week, and can't drift. Same image pin as test-pipeline.yml.
+    services:
+      redis:
+        image: docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -42,7 +53,6 @@ jobs:
       NEO4J_URI: ${{ secrets.EVAL_NEO4J_URI }}
       NEO4J_USER: ${{ secrets.EVAL_NEO4J_USER }}
       NEO4J_PASSWORD: ${{ secrets.EVAL_NEO4J_PASSWORD }}
-      REDIS_URL: ${{ secrets.EVAL_REDIS_URL }}
       DO_KB_ENABLED: "true"
       DO_API_TOKEN: ${{ secrets.EVAL_DO_API_TOKEN }}
       DO_KB_REGION: ${{ secrets.EVAL_DO_KB_REGION }}
@@ -53,7 +63,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Resolve experiment prefix
+        env:
+          # `job.services` is not available in job-level env, so export it here.
+          REDIS_SERVICE_PORT: ${{ job.services.redis.ports['6379'] }}
         run: |
+          echo "REDIS_URL=redis://localhost:${REDIS_SERVICE_PORT}/0" >> "$GITHUB_ENV"
           PREFIX="${INPUT_EXPERIMENT_PREFIX:-agent-regression}"
           # Defensive sanitization: keep only [A-Za-z0-9_-] characters
           PREFIX="$(printf '%s' "$PREFIX" | tr -cd 'A-Za-z0-9_-')"
