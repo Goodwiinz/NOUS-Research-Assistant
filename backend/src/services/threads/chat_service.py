@@ -776,7 +776,7 @@ class ChatService:
         else:
             message = ChatMessage(
                 thread_id=data.thread_id,
-                user_id=user_id if data.role == MessageRole.USER else None,
+                user_id=user_id if is_user_turn else None,
                 role=data.role,
                 content=data.content,
                 token_count=message_token_count,

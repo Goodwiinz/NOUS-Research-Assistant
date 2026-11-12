@@ -375,9 +375,10 @@ class TestEntityScopePredicate:
 
         return _entity_scope_predicate
 
-    def test_unscoped_returns_none(self):
+    def test_unscoped_fails_closed(self):
+        # D2: a dropped tenant scope matches nothing instead of every tenant.
         params = {}
-        assert self._fn()("e", None, None, params) is None
+        assert self._fn()("e", None, None, params) == "false"
         assert params == {}
 
     def test_org_only_uses_indexed_equality(self):
@@ -420,9 +421,9 @@ class TestTwoEndpointScope:
 
         return _two_endpoint_scope
 
-    def test_unscoped(self):
+    def test_unscoped_fails_closed(self):
         frag, params = self._fn()("start", "related", None, None)
-        assert frag == ""
+        assert frag == "\n  AND false"
         assert params == {}
 
     def test_org_wide_uses_indexed_equality_on_both_endpoints(self):

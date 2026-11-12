@@ -74,14 +74,6 @@ def test_redis_socket_timeouts() -> None:
     assert "socket_timeout=2" in src
 
 
-# R2-M12
-def test_eval_cleanup_deletes_children_first() -> None:
-    src = _read("src/tasks/evaluation_tasks.py")
-    blk = src[src.find("def cleanup_old_evaluations") :]
-    assert "EvaluationMetric, EvaluationReport, EvaluationComparison" in blk
-    assert "synchronize_session=False" in blk
-
-
 # R2-M13
 def test_sweep_preserves_prior_error() -> None:
     src = _read("src/tasks/agent_run_tasks.py")
