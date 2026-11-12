@@ -4,6 +4,11 @@ import { useState, type ReactElement } from 'react';
 import { useHarnessConnection } from '@/hooks/chat/useHarnessConnection';
 import type { NativeDecision } from '@/services/harnessService';
 
+const PROVIDER_LABELS = {
+  nous: 'NOUS',
+  codex: 'Local Codex',
+} as const;
+
 interface HarnessSelectorProps {
   controller: ReturnType<typeof useHarnessConnection>;
   disabled?: boolean;
@@ -146,6 +151,9 @@ export function HarnessSelector({
     decideRequest,
   } = controller;
 
+  const statusRepeatsProvider =
+    statusLabel.trim() === PROVIDER_LABELS[executionProvider];
+
   const decide = async (requestId: string, allow: boolean): Promise<void> => {
     setRequestError(null);
     setBusyRequestId(requestId);
@@ -216,8 +224,8 @@ export function HarnessSelector({
         }
         className="h-8 rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 text-xs text-(--nous-fg-1) focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
       >
-        <option value="nous">NOUS</option>
-        <option value="codex">Local Codex</option>
+        <option value="nous">{PROVIDER_LABELS.nous}</option>
+        <option value="codex">{PROVIDER_LABELS.codex}</option>
       </select>
       {executionProvider === 'codex' && (
         <>
@@ -277,7 +285,13 @@ export function HarnessSelector({
       <span
         role="status"
         aria-live="polite"
-        className="hidden md:inline text-xs text-(--nous-fg-2)"
+        className={
+          // The status stays in the accessibility tree either way; it is only
+          // hidden visually when it would repeat the select's own label.
+          statusRepeatsProvider
+            ? 'sr-only'
+            : 'hidden md:inline text-xs text-(--nous-fg-2)'
+        }
       >
         {statusLabel}
       </span>

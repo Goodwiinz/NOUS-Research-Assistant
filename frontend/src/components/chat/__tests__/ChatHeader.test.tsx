@@ -68,6 +68,25 @@ describe('ChatHeader', () => {
     expect(screen.getByText('ArXiv Literature Review')).toBeInTheDocument();
   });
 
+  it('makes the thread title the page h1, truncated with the full title on hover', () => {
+    const chatTitle =
+      'How many sample sensors does Project Cedar Lantern have in the field';
+    render(<ChatHeader chatTitle={chatTitle} />);
+
+    const heading = screen.getByRole('heading', { level: 1, name: chatTitle });
+    expect(heading).toHaveAttribute('title', chatTitle);
+    expect(heading.className).toContain('truncate');
+    expect(heading.className).toContain('min-w-0');
+    // Every flex ancestor up to the header row must be allowed to shrink, or
+    // the title is hard-clipped instead of ellipsized.
+    let node = heading.parentElement;
+    while (node && node.dataset.testid !== 'chat-mobile-header') {
+      expect(node.className).toContain('min-w-0');
+      node = node.parentElement;
+    }
+    expect(node?.className).toContain('min-w-0');
+  });
+
   it('does not include a workspace selector (moved to ChatSidebar)', () => {
     render(<ChatHeader />);
     expect(screen.queryByLabelText('Select workspace')).not.toBeInTheDocument();

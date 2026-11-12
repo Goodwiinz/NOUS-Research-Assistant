@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { paper } from '@/components/elements/surfaces';
 import { Citation, getCitationIdentifier } from '@/utils/citationParser';
+import { stripHighlightTags } from '@/utils/searchHighlight';
 
 export interface CitationPanelBodyProps {
   citations: Citation[];
@@ -296,7 +297,7 @@ function SourcePassage({
   onOpen?: (citation: Citation) => void;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
-  const content = chunk.content ?? '';
+  const content = stripHighlightTags(chunk.content) ?? '';
   const isLong = content.length > SOURCE_PREVIEW_LENGTH;
   const displayContent =
     isLong && !expanded
@@ -384,7 +385,7 @@ export function CitationPanelBody({
       ? citations.filter(
           (c) =>
             c.title.toLowerCase().includes(q) ||
-            c.content?.toLowerCase().includes(q) ||
+            stripHighlightTags(c.content)?.toLowerCase().includes(q) ||
             c.source?.toLowerCase().includes(q)
         )
       : citations;

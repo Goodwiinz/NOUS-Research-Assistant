@@ -38,4 +38,15 @@ describe('WelcomeState starters', () => {
     );
     expect(onPromptSelect).toHaveBeenCalledWith('Compare these findings: ');
   });
+  it('keeps the welcome heading an h2 so the thread title is the only h1', () => {
+    render(<WelcomeState onPromptSelect={vi.fn()} />);
+
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'What would you like to find out?',
+      })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
 });

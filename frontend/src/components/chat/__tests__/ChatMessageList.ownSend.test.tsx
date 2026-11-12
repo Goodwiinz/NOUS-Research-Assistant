@@ -78,8 +78,32 @@ async function scrollAway(view: ReturnType<typeof render>): Promise<void> {
   });
   container.scrollTop = 0;
   fireEvent.scroll(container);
+  // Scrolling away alone brings nothing new: the pill offers a jump, it does
+  // not claim new messages.
   await waitFor(() =>
-    expect(within(view.container).getByText('New messages')).toBeTruthy()
+    expect(within(view.container).getByText('Jump to latest')).toBeTruthy()
+  );
+}
+
+function treeWithStream(
+  messages: ChatPageMessage[],
+  streamingContent: string
+): ReactElement {
+  return (
+    <ChatRuntimeProvider
+      messages={messages}
+      isRunning
+      onSend={() => {}}
+      onCancel={() => {}}
+    >
+      <ChatMessageList
+        {...baseProps}
+        storeIsStreaming
+        storeStreamingContent={streamingContent}
+        activeThreadId="thread-A"
+        messages={messages}
+      />
+    </ChatRuntimeProvider>
   );
 }
 
@@ -108,8 +132,70 @@ describe('ChatMessageList auto-scroll while scrolled away', () => {
     // mounted until its exit animation completes. Wait for that visible
     // outcome separately instead of treating a scroll call as DOM removal.
     await waitFor(() =>
-      expect(within(view.container).queryByText('New messages')).toBeNull()
+      expect(
+        within(view.container).queryByRole('button', { name: /latest/i })
+      ).toBeNull()
     );
+    expect(within(view.container).queryByText('New messages')).toBeNull();
+  });
+
+  it('labels a plain scroll-away "Jump to latest" with a matching name', async () => {
+    const view = render(tree(history));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    await scrollAway(view);
+
+    expect(within(view.container).queryByText('New messages')).toBeNull();
+    expect(
+      within(view.container).getByRole('button', {
+        name: 'Jump to latest message',
+      })
+    ).toBeTruthy();
+  });
+
+  it('says "New messages" when streamed content grows while scrolled away', async () => {
+    const view = render(treeWithStream(history, 'Part'));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    await scrollAway(view);
+
+    view.rerender(treeWithStream(history, 'Partial answer grows'));
+
+    await waitFor(() =>
+      expect(within(view.container).getByText('New messages')).toBeTruthy()
+    );
+    expect(
+      within(view.container).getByRole('button', {
+        name: 'New messages below, jump to latest',
+      })
+    ).toBeTruthy();
+  });
+
+  it('resets to "Jump to latest" after the user returns to the bottom', async () => {
+    const view = render(tree(history));
+    const { rerender } = view;
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    await scrollAway(view);
+    const more = [
+      ...history,
+      makeChatPageMessage({ role: 'assistant', content: 'later', timestamp: 3 }),
+    ];
+    rerender(tree(more));
+    await waitFor(() =>
+      expect(within(view.container).getByText('New messages')).toBeTruthy()
+    );
+
+    const container = view.getByRole('region', {
+      name: 'Conversation transcript',
+    });
+    container.scrollTop = 1600;
+    fireEvent.scroll(container);
+    await waitFor(() =>
+      expect(
+        within(view.container).queryByRole('button', { name: /latest/i })
+      ).toBeNull()
+    );
+
+    await scrollAway(view);
+    expect(within(view.container).queryByText('New messages')).toBeNull();
   });
 
   it('still respects the guard for content the user did not initiate', async () => {
