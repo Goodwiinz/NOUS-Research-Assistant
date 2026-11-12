@@ -651,7 +651,11 @@ def cleanup_old_evaluations():
 
         # R2-M12: metrics/reports/comparisons FK the job without ondelete —
         # deleting the parent row nightly raised IntegrityError forever and
-        # nothing ever got cleaned. Remove dependents first.
+        # nothing ever got cleaned. Remove dependents first. Metrics and
+        # reports reference the job via job_id; comparisons have no job_id and
+        # reference jobs via baseline_job_id / comparison_job_id instead.
+        from sqlalchemy import or_
+
         from src.models.evaluation import (
             EvaluationComparison,
             EvaluationMetric,
@@ -660,10 +664,16 @@ def cleanup_old_evaluations():
 
         job_ids = [job.id for job in old_jobs]
         if job_ids:
-            for model in (EvaluationMetric, EvaluationReport, EvaluationComparison):
+            for model in (EvaluationMetric, EvaluationReport):
                 db.query(model).filter(model.job_id.in_(job_ids)).delete(
                     synchronize_session=False
                 )
+            db.query(EvaluationComparison).filter(
+                or_(
+                    EvaluationComparison.baseline_job_id.in_(job_ids),
+                    EvaluationComparison.comparison_job_id.in_(job_ids),
+                )
+            ).delete(synchronize_session=False)
 
         for job in old_jobs:
             db.delete(job)

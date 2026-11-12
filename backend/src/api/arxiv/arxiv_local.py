@@ -336,6 +336,7 @@ async def _extract_features_from_local_pdfs(
                     }
                 )
 
+        graph_update_skipped = False
         if request.update_knowledge_graph and processed_count > 0:
             logger.info(
                 f"Scheduling knowledge graph update for {processed_count} papers"
@@ -349,15 +350,33 @@ async def _extract_features_from_local_pdfs(
                 else getattr(current_user, "organization_id", None)
             )
             org_id = str(_org_raw) if _org_raw else None
-            # Create background tasks for each result to process independently
-            for result in extraction_results:
-                background_tasks.add_task(
-                    _post_process_extraction, result, request, org_id
+            if org_id is None:
+                # D2: graph writes need a tenant. Without one the background
+                # task would write paper/topic entities and then have every
+                # topic link refused, leaving a half-built graph.
+                graph_update_skipped = True
+                logger.warning(
+                    "Skipping knowledge graph update for %s papers: user has "
+                    "no organization",
+                    processed_count,
                 )
+            else:
+                # Create background tasks for each result to process
+                # independently
+                for result in extraction_results:
+                    background_tasks.add_task(
+                        _post_process_extraction, result, request, org_id
+                    )
 
+        message = f"Successfully processed {processed_count} files"
+        if graph_update_skipped:
+            message += (
+                "; knowledge graph not updated because your account has no "
+                "organization"
+            )
         return LocalExtractionResponse(
             status="success",
-            message=f"Successfully processed {processed_count} files",
+            message=message,
             total_files_found=len(pdf_files),
             processed_count=processed_count,
             results=extraction_results,
