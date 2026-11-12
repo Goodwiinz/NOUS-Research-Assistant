@@ -245,7 +245,9 @@ def test_two_account_postgres_search_step_requires_executed_tests(
         for step in job["steps"]
         if step.get("name") == "Run two-account PostgreSQL search isolation tests"
     )
-    assert "matrix.shard == 1" in step["if"]
+    # Pinned to the shortest shard so shard 1 (ingestion recovery lane) is not
+    # also the longest leg; the lane must still run on exactly one shard.
+    assert "matrix.shard == 3" in step["if"]
     assert (
         "job.services.postgres.ports['5432']"
         in step["env"]["TWO_ACCOUNT_PG_TEST_DATABASE_URL"]
