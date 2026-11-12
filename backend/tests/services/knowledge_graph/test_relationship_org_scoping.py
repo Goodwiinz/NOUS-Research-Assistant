@@ -102,12 +102,15 @@ def test_create_relationship_raises_scope_error_for_scoped_miss() -> None:
 
 
 @pytest.mark.unit
-def test_create_relationship_keeps_generic_error_for_unscoped_miss() -> None:
+def test_create_relationship_refuses_unscoped_request_before_querying() -> None:
+    """D2: with neither an org nor source_document_ids the call is refused up
+    front (it used to run an unscoped MERGE and report a generic miss)."""
     captured: Dict[str, Any] = {}
     svc = _svc(None, captured)
 
-    with pytest.raises(RuntimeError, match="Failed to create relationship"):
+    with pytest.raises(RelationshipScopeError, match="create_relationship refused"):
         svc.create_relationship(_req())
+    assert "query" not in captured
 
 
 @pytest.mark.unit
@@ -184,9 +187,7 @@ def test_get_all_relationships_scopes_by_org() -> None:
 
     svc.get_session = _fake_get_session  # type: ignore[method-assign]
 
-    svc.get_all_relationships(
-        organization_id="org-A", source_document_ids=["d1"]
-    )
+    svc.get_all_relationships(organization_id="org-A", source_document_ids=["d1"])
 
     q = captured["query"]
     assert "source.organization_id = $organization_id" in q

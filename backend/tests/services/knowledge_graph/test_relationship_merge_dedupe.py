@@ -15,9 +15,7 @@ from typing import Any, Dict, Iterator
 import pytest
 
 from src.models.graph import CreateRelationshipRequest, RelationshipType
-from src.services.knowledge_graph.knowledge_graph_service import (
-    KnowledgeGraphService,
-)
+from src.services.knowledge_graph.knowledge_graph_service import KnowledgeGraphService
 
 
 class _FakeResult:
@@ -86,7 +84,10 @@ def test_create_relationship_merges_not_creates() -> None:
     record = {"r": {"id": "pre-existing-edge"}, "source": {}, "target": {}}
     svc = _service_with_session(record, captured)
 
-    resp = svc.create_relationship(_request())
+    # Scoped by org: create_relationship refuses unscoped requests (D2).
+    resp = svc.create_relationship(
+        _request().model_copy(update={"organization_id": "org-1"})
+    )
 
     _assert_merge_upsert_shape(captured["query"])
     # The existing edge's id is read back, not the freshly generated uuid.
@@ -123,6 +124,7 @@ def test_null_source_document_id_coalesced_for_merge_key() -> None:
         source_entity_id="a",
         target_entity_id="b",
         relationship_type=RelationshipType.RELATED_TO,
+        organization_id="org-1",
     )
     svc.create_relationship(req)
 

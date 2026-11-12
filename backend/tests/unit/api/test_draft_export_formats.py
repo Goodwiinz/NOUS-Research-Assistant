@@ -100,10 +100,12 @@ def _sha(data: bytes) -> str:
 
 
 # Captured before GOO-317 touched export_draft (route + service as of af10ffa21).
+# latex.tex re-captured for RC-1: the two "## " lines now render as \section{}
+# instead of escaped "\#\# " text; every other byte is unchanged.
 GOLDEN = {
     "markdown": "66e7b2b35458a2491d66805cbea11da31876e24641250fd2c64393228449e835",
     "markdown-apa": "314c4344f774c03b41333020f3bb23aff6c7cb0618551a28bd01e1d796ea59d6",
-    "latex.tex": "afda2c9349621f662f6144f65b0f607c32cd148d8c81952650e2e0a8454495fc",
+    "latex.tex": "50c066a0bf57d52438b9c388d63959e18b402208a68b470e7ead665c1f847437",
     "latex.bib": "58217ffee4698cbf3ac3b948fb041eedd405a1f5822830762cff665335bb1673",
 }
 
