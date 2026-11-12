@@ -48,7 +48,7 @@ describe('agentChatStore generation lifecycle', () => {
     serviceMocks.getDurableRunStatus.mockResolvedValue({ status: 'PENDING' });
   });
 
-  it('reuses the streamed placeholder when SSE throws mid-stream (H5)', async () => {
+  it('keeps one settled bubble and no durable re-run when SSE throws mid-stream (H5, A4-AG3)', async () => {
     serviceMocks.streamMessage.mockImplementation((async (
       _req: unknown,
       callbacks: AgentStreamCallbacks
@@ -58,12 +58,12 @@ describe('agentChatStore generation lifecycle', () => {
     }) as never);
 
     useAgentChatStore.getState().setInputValue('hello');
-    const send = useAgentChatStore.getState().sendMessage();
-    await vi.waitFor(() =>
-      expect(serviceMocks.startDurableRun).toHaveBeenCalled()
-    );
-    useAgentChatStore.getState().stopGeneration();
-    await send;
+    await useAgentChatStore.getState().sendMessage();
+
+    // A streamed token means the backend accepted the run; re-running the
+    // turn through the durable path would execute it twice (A4-AG3).
+    expect(serviceMocks.startDurableRun).not.toHaveBeenCalled();
+    expect(useAgentChatStore.getState().isStreaming).toBe(false);
 
     const assistants = useAgentChatStore
       .getState()
