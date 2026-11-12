@@ -81,6 +81,11 @@ jobs:
             python3 -m venv .venv
           fi
           .venv/bin/pip install -q -r requirements.txt
+          # Same pins as requirements-test.txt (not installed here).
+          # rerunfailures: the sweep reruns live cases once. timeout: enforces
+          # pytest.ini's `timeout = 300`, which is inert without the plugin, so
+          # a hung live call (possibly hung twice now) cannot eat the 30m budget.
+          .venv/bin/pip install -q "pytest-rerunfailures==16.7" "pytest-timeout==2.4.0"
 
       # Regenerate the remote dataset from golden_examples.py EVERY run so it
       # can never drift (upsert + delete orphans). This is what prevents the
@@ -102,8 +107,39 @@ jobs:
         # for the committed replay cassettes — if a cassette no longer matches
         # live model behavior, this job goes red. (Per-PR the golden cases run
         # creds-free via AGENT_GOLDEN_REPLAY in test-pipeline.yml.)
+        #
+        # --reruns 1: these cases call the live model, which is not
+        # deterministic. From 2026-09-07 to 2026-11-09 the job failed 9 of 10
+        # weeks, each time on 1-2 of 26 cases, and a DIFFERENT case most
+        # weeks (writing_summarize, ingest_arxiv_id_only, retry_after_failed_search,
+        # the dataset sweep). A red that never clears is ignored. One rerun keeps
+        # a DETERMINISTIC regression red (it fails twice) while one-off sampling
+        # noise passes. It can mask a regression that is itself probabilistic
+        # (a case now failing 40% of the time passes ~84% of weeks), so the next
+        # step annotates every rerun: green-with-reruns is a warning, not silence.
+        # A rerun of the dataset sweep re-runs all of its examples and creates
+        # a second LangSmith experiment under the same prefix.
         run: |
-          .venv/bin/pytest -m "langsmith or golden" tests/eval/test_agent_regression.py -v --tb=short
+          .venv/bin/pytest -m "langsmith or golden" tests/eval/test_agent_regression.py -v --tb=short --reruns 1 --junitxml=eval-junit.xml
+
+      - name: Flag reruns
+        if: always()
+        run: |
+          [ -f eval-junit.xml ] || exit 0
+          python3 - <<'PY'
+          import collections
+          import xml.etree.ElementTree as ET
+          # pytest-rerunfailures 16.x writes each attempt as its own <testcase>
+          # (no rerun element), so a rerun test appears more than once.
+          seen = collections.Counter(
+              (tc.get("classname"), tc.get("name"))
+              for tc in ET.parse("eval-junit.xml").iter("testcase")
+          )
+          reruns = [name for (_, name), n in seen.items() if n > 1]
+          for name in reruns:
+              print(f"::warning::Live eval case needed a rerun (possible drift): {name}")
+          print(f"{len(reruns)} case(s) rerun")
+          PY
 
       - name: Summary on failure
         if: failure()
