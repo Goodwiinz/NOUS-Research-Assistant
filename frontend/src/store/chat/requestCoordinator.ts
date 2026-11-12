@@ -50,7 +50,7 @@ export function abortAllNewestPageRequests(): void {
   deletedThreadIds.clear();
 }
 
-// Module-level abort controller for the deprecated `streamMessage` v2 path
+// Module-level abort controller released by `stopStreaming` and store reset
 // (outside Immer state to avoid proxy issues).
 export let activeAbortController: AbortController | null = null;
 

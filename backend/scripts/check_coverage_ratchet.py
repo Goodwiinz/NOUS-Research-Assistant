@@ -100,7 +100,6 @@ FLOORS: dict[str, int] = {
     "src/tasks/research_tasks.py": 54,
     "src/services/agent/subgraphs/data_agent.py": 75,
     # 70-75% coverage
-    "src/services/threads/stream_service.py": 74,
     "src/models/evaluation.py": 74,
     "src/models/collection.py": 73,
     "src/services/agent/error_recovery.py": 73,

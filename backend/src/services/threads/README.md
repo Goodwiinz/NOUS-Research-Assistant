@@ -9,7 +9,7 @@ Persistence and access control for the workspace hierarchy: workspace, conversat
 | `workspace_access.py` | The one access funnel. Every scope and access check for the hierarchy goes through it. Routers wrap it in `workspace_routes/dependencies.py` to turn a miss into a 404; `ChatService` calls it directly. |
 | `workspace_service.py` | Workspace and workspace-member persistence. |
 | `conversation_service.py`, `thread_service.py`, `message_service.py`, `collection_service.py` | Persistence for each level of the hierarchy. |
-| `chat_service.py`, `stream_service.py` | Thread-centric chat persistence and the SSE stream service. |
+| `chat_service.py` | Thread-centric chat persistence. |
 | `thread_event_service.py` | Real-time WebSocket notifications for thread changes. |
 | `thread_message_search_service.py` | Thread and message full-text search (`/api/v2/search`). |
 | `thread_summarization_service.py`, `thread_title_generator.py` | AI summaries and generated titles. |

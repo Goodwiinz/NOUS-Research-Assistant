@@ -30,7 +30,6 @@ This directory is the frontend's API client layer. Every call to the FastAPI bac
 | `nousCliAuth.ts`                | Auth token exchange for the NOUS CLI (desktop companion).                                                                                                                                           |
 | `projectChatService.ts`         | Chat completions scoped to a project context.                                                                                                                                                       |
 | `mockDocumentService.ts`        | Drop-in mock of `documentService` for tests and Storybook.                                                                                                                                          |
-| `streamingService.ts`           | **Deprecated.** Old v2 SSE path (`/api/v2/threads/{id}/stream`). Do not add new callers; use `agentChatService.streamMessage`.                                                                      |
 
 ## HTTP client conventions
 
