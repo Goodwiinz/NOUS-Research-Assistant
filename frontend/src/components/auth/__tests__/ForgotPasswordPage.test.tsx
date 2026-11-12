@@ -27,7 +27,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-function expectLoginLayout(container: HTMLElement): void {
+function expectLoginLayout(container: HTMLElement): HTMLElement {
   // Same split as /login: scene panel, then the cream form panel as <main>.
   expect(
     container.querySelector('img[src="/landing/reading-room-login.svg"]')

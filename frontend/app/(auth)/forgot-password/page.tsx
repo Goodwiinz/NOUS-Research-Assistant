@@ -20,7 +20,8 @@ const SCENE = {
 const SceneBody = (
   <>
     Resetting your password changes how you sign in, not what you have read.
-    Your documents and notes stay where they are.
+    Your documents and notes stay where they are. We email you a link to
+    choose a new one.
     <sup className="align-super text-[0.6em] font-semibold text-(--nous-helios)">
       1
     </sup>

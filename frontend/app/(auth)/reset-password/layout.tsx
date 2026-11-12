@@ -11,5 +11,11 @@ export default function Layout({
 }: {
   children: React.ReactNode;
 }): React.ReactNode {
-  return children;
+  // Every state of this page is a dark nyx card inside the always-light auth
+  // layout, so it opts back in to dark native controls and dark autofill.
+  return (
+    <div className="nous-dark-surface" style={{ colorScheme: 'dark' }}>
+      {children}
+    </div>
+  );
 }

@@ -1315,11 +1315,17 @@
 }
 
 /* Chrome/Safari autofill override — dark mode */
-/* Not inside an always-light brand surface; :where() keeps specificity. */
+/* Not inside an always-light brand surface; :where() keeps specificity.
+   .nous-dark-surface opts an always-dark card back in from inside one
+   (reset-password sits in the light auth layout but stays nyx). */
 .dark input:-webkit-autofill:not(:where(.nous-light *)),
 .dark input:-webkit-autofill:not(:where(.nous-light *)):hover,
 .dark input:-webkit-autofill:not(:where(.nous-light *)):focus,
-.dark input:-webkit-autofill:not(:where(.nous-light *)):active {
+.dark input:-webkit-autofill:not(:where(.nous-light *)):active,
+.nous-dark-surface input:-webkit-autofill,
+.nous-dark-surface input:-webkit-autofill:hover,
+.nous-dark-surface input:-webkit-autofill:focus,
+.nous-dark-surface input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0 1000px rgba(13, 13, 20, 0.98) inset !important;
   -webkit-text-fill-color: rgba(255, 255, 255, 0.9) !important;
   background-color: rgba(13, 13, 20, 0.98) !important;
@@ -1328,7 +1334,8 @@
   transition: background-color 5000s ease-in-out 0s;
 }
 
-.dark .relative:not(:where(.nous-light *)):has(input:-webkit-autofill) svg {
+.dark .relative:not(:where(.nous-light *)):has(input:-webkit-autofill) svg,
+.nous-dark-surface .relative:has(input:-webkit-autofill) svg {
   color: rgba(255, 255, 255, 0.3) !important;
 }
 
