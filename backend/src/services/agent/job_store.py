@@ -48,6 +48,31 @@ class JobStatusPublicationError(RuntimeError):
 # ---------------------------------------------------------------------------
 _JOB_KEY_PREFIX = "agent:job:"
 _JOB_TTL_SECONDS = 3600  # 1 hour — matches the old in-memory expiry
+# A HITL run parked in awaiting_confirmation waits on a human, who may take
+# far longer than an hour to answer (audit R2-H3). Keep that record for a day
+# so /confirm still finds it; the stale-awaiting sweeper
+# (AGENT_RUN_STALE_AWAITING_AFTER_SECONDS) must stay longer than this.
+_AWAITING_JOB_TTL_SECONDS = 86400  # 24 hours
+
+
+def _job_ttl_seconds(status: Any) -> int:  # noqa: ANN401
+    """Return the store TTL for a job record in *status*.
+
+    ``awaiting_confirmation`` gets the long HITL window; every other status
+    keeps the 1h default.
+    """
+    try:
+        parked = JobStatus(status) is JobStatus.AWAITING_CONFIRMATION
+    except (TypeError, ValueError):
+        parked = False
+    return _AWAITING_JOB_TTL_SECONDS if parked else _JOB_TTL_SECONDS
+
+
+def _l1_entry_expired(entry: dict, now: float) -> bool:
+    """True when an L1 entry is older than the TTL for its status."""
+    created_at = float(entry.get("created_at", 0))
+    return now - created_at > _job_ttl_seconds(entry.get("status"))
+
 
 # ---------------------------------------------------------------------------
 # In-memory L1 cache (write-through)
@@ -206,14 +231,16 @@ def _retire_pending_publication(
 
 
 def _l1_cleanup() -> None:
-    """Remove expired entries (>1h) and evict oldest when over max.
+    """Remove expired entries and evict oldest when over max.
+
+    Expiry is per status: 24h for awaiting_confirmation, 1h otherwise.
 
     Must be called while holding ``_l1_lock``.
     """
     global _LAST_L1_CLEANUP
     now = time.time()
     expired = [
-        k for k, v in _l1.items() if now - v.get("created_at", now) > _JOB_TTL_SECONDS
+        k for k, v in _l1.items() if "created_at" in v and _l1_entry_expired(v, now)
     ]
     for k in expired:
         del _l1[k]
@@ -463,7 +490,7 @@ async def _redis_write_if_newer(
                     pipe.multi()
                     pipe.setex(
                         key,
-                        _JOB_TTL_SECONDS,
+                        _job_ttl_seconds(candidate.get("status")),
                         _json.dumps(candidate, default=str),
                     )
                     await pipe.execute()
@@ -811,11 +838,22 @@ async def compare_and_set_status(
                         return "conflict"
                     job["status"] = new_status
                     job["_confirmation_claim_id"] = claim_id
-                    ttl = await pipe.ttl(key)
+                    remaining = await pipe.ttl(key)
+                    status_ttl = _job_ttl_seconds(new_status)
+                    if status_ttl == _AWAITING_JOB_TTL_SECONDS:
+                        # Parking for a human: restart the full HITL window.
+                        ttl = status_ttl
+                    elif remaining and remaining > 0:
+                        # Keep the record's remaining life, but never let a
+                        # former awaiting record's 24h window outlive the 1h
+                        # TTL of the status it moves to.
+                        ttl = min(remaining, status_ttl)
+                    else:
+                        ttl = status_ttl
                     pipe.multi()
                     pipe.setex(
                         key,
-                        ttl if (ttl and ttl > 0) else _JOB_TTL_SECONDS,
+                        ttl,
                         _json.dumps(job, default=str),
                     )
                     await pipe.execute()  # raises WatchError if key changed
@@ -890,7 +928,7 @@ async def get_job(job_id: str) -> Optional[dict]:
         _l1_maybe_cleanup()
         entry = _l1.get(job_id)
         if entry is not None:
-            if time.time() - entry.get("created_at", 0) > _JOB_TTL_SECONDS:
+            if _l1_entry_expired(entry, time.time()):
                 del _l1[job_id]
             else:
                 cached = entry
@@ -951,7 +989,7 @@ async def get_job_fresh(job_id: str) -> Optional[dict]:
         cached = _l1.get(job_id)
         if cached is None:
             return None
-        if time.time() - cached.get("created_at", 0) > _JOB_TTL_SECONDS:
+        if _l1_entry_expired(cached, time.time()):
             del _l1[job_id]
             _retire_pending_publication(job_id)
             return None
@@ -978,7 +1016,7 @@ async def get_job_for_poll(job_id: str) -> Optional[dict]:
                 cached = _l1.get(job_id)
                 if cached is None:
                     return None
-                if time.time() - cached.get("created_at", 0) > _JOB_TTL_SECONDS:
+                if _l1_entry_expired(cached, time.time()):
                     del _l1[job_id]
                     _retire_pending_publication(job_id)
                     return None

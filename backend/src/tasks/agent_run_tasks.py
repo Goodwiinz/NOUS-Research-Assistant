@@ -357,8 +357,8 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
     - re-read and re-check under the lease (a confirm may have just landed),
     - ``awaiting_confirmation`` gets the longer
       ``AGENT_RUN_STALE_AWAITING_AFTER_SECONDS`` window — it is a
-      legitimately-parked state until the 1h Redis job TTL makes the confirm
-      impossible,
+      legitimately-parked state until the 24h awaiting Redis job TTL makes
+      the confirm impossible,
     - if the LIVE job store still holds a terminal status the projection
       missed (fire-and-forget write lost), REPAIR the projection instead of
       failing a finished run,
