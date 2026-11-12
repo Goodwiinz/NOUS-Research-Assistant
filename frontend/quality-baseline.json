@@ -17,13 +17,9 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 89,
-    "warnings": 1820,
+    "errors": 88,
+    "warnings": 1808,
     "byFile": {
-      "app/(auth)/forgot-password/page.tsx": {
-        "errors": 1,
-        "warnings": 2
-      },
       "app/(auth)/layout.tsx": {
         "errors": 0,
         "warnings": 1
@@ -257,14 +253,6 @@
         "warnings": 1
       },
       "app/layout.tsx": {
-        "errors": 0,
-        "warnings": 1
-      },
-      "app/not-found.tsx": {
-        "errors": 0,
-        "warnings": 3
-      },
-      "app/page.tsx": {
         "errors": 0,
         "warnings": 1
       },
@@ -916,14 +904,6 @@
         "errors": 0,
         "warnings": 1
       },
-      "src/components/landing/FooterSection.tsx": {
-        "errors": 0,
-        "warnings": 1
-      },
-      "src/components/landing/HeroSection.tsx": {
-        "errors": 0,
-        "warnings": 1
-      },
       "src/components/layout/__tests__/DiagnosticsPage.test.tsx": {
         "errors": 0,
         "warnings": 1
@@ -959,10 +939,6 @@
       "src/components/layout/SidebarLayout.tsx": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/components/layout/SimpleLayout.tsx": {
-        "errors": 0,
-        "warnings": 4
       },
       "src/components/llm-chat/ChatInput.tsx": {
         "errors": 0,

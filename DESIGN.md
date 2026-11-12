@@ -19,7 +19,7 @@ Planetary palette (`nous-tokens.css`). Warm gold is the identity accent.
 
 - Erebus `#0a0a0e` (near-black), Selene `#f7f7f5` (near-white)
 - Sol `#d4a039` (gold, primary accent), Helios `#e8b84a` (gold hover/bright), Apollo `#f5d680` (soft gold), Aurum `#fdf6e3` (light gold wash)
-- Sol-safe `#996d1a` (accessible gold for text on light)
+- Sol-safe `#946919` (accessible gold for text on light: 4.53:1 on Aurum, 4.56:1 on Selene, 4.89:1 on white)
 
 **Semantic (theme-adaptive via `.dark`)**
 
@@ -72,6 +72,7 @@ Scale: fixed rem in product (≈1.125–1.2 ratio); larger display steps allowed
 
 - Light/dark via `.dark` class (`next-themes`). `--nous-*` semantic vars flip; brand anchors and the dark depth stack are absolute.
 - The brand landing is intentionally always-light in the manuscript direction (Selene `#f7f7f5` ground, Aurum `#fdf6e3` band, Erebus ink), independent of user theme. The dark depth stack remains for auth and any dark brand surfaces.
+- Always-light surfaces carry the `nous-light` class once at their root (`app/page.tsx`, `app/(auth)/layout.tsx`). Inside it every theme-adaptive token (`--nous-fg-*`, `--nous-bg-*`, shadcn `--background` etc. and the Tailwind `--color-*` they feed) resolves to its light value and `dark:` variants do not match, whatever the app theme. Absolute tokens (the dark depth stack included) are unchanged, so dark panels inside the scope still use Nyx/Ivory/Parchment directly.
 
 ## Anti-patterns (do not ship)
 

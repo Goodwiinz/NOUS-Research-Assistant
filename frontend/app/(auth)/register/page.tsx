@@ -39,11 +39,10 @@ const SCENE = {
 const SceneBody = (
   <>
     Create an account to search, connect and synthesize your documents in one
-    place
-    <sup className="ml-0.5 align-super text-[0.6em] font-semibold text-(--nous-helios)">
+    place.
+    <sup className="align-super text-[0.6em] font-semibold text-(--nous-helios)">
       1
     </sup>
-    .
   </>
 );
 
@@ -195,8 +194,8 @@ export default function RegisterPage() {
         proseTone="parchment"
       />
 
-      {/* Right panel — form */}
-      <div className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
+      {/* Right panel: form */}
+      <main className="flex items-center justify-center bg-(--nous-aurum) px-5 py-8 lg:px-8 lg:py-16">
         <div className="w-full max-w-[440px]">
           <div className="flex flex-col gap-5">
             <div>
@@ -462,7 +461,7 @@ export default function RegisterPage() {
             </p>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

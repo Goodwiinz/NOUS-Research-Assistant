@@ -4,8 +4,10 @@
    Additive to globals.css; introduces --nous-* brand vars only.
    ============================================================ */
 
-:root {
-  /* Planetary palette — Light */
+:root,
+.nous-light {
+  /* Planetary palette — Light. Also declared on .nous-light so always-light
+     brand surfaces (landing, auth) resolve the light values under .dark. */
   --nous-erebus: #0a0a0e;
   --nous-selene: #f7f7f5;
   --nous-sol: #d4a039;
@@ -18,10 +20,13 @@
   --nous-terra: #34d399;
   --nous-corona: #f59e0b;
   --nous-mars: #ef4444;
-  --nous-sol-safe: #996d1a;
+  /* Accessible gold for text on light grounds: 4.53:1 on aurum, 4.56:1 on
+     selene, 4.89:1 on white (the previous #996d1a was 4.27/4.30, under AA). */
+  --nous-sol-safe: #946919;
   /* Fresh-tail ink — the streamed-text tint. Its own step because sol-safe
-     is 4.30:1 on --nous-bg-1, under the 4.5:1 that 14-15px body text needs;
-     this is 4.80:1 on #f7f7f5. Dark theme maps it to helios (10.13:1 on nyx). */
+     was 4.30:1 on --nous-bg-1, under the 4.5:1 that 14-15px body text needs
+     (it is now 4.56:1, with little margin); this is 4.80:1 on #f7f7f5. Dark
+     theme maps it to helios (10.13:1 on nyx). */
   --nous-fresh-ink: #8f6618;
 
   /* Sol alpha steps (replace legacy --phosphor-green-{subtle,muted,glow}) */

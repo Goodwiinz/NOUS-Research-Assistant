@@ -2,6 +2,7 @@
 
 import { ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import type { ReactElement } from 'react';
 
 const UI = { fontFamily: 'var(--nous-font-ui)' } as const;
 const SERIF = { fontFamily: 'var(--nous-font-body)' } as const;
@@ -30,138 +31,153 @@ interface HeroSectionProps {
   isAuthenticated: boolean;
 }
 
-export function HeroSection({ isAuthenticated }: HeroSectionProps) {
+/**
+ * Top nav. A separate export from HeroSection so app/page.tsx can keep the
+ * nav outside <main> and the hero inside it.
+ */
+export function LandingNav({
+  isAuthenticated,
+}: HeroSectionProps): ReactElement {
   return (
-    <>
-      <nav
-        className="h-14 lg:h-16 border-b border-(--nous-enceladus)"
-        style={UI}
-      >
-        <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
-          <Link href="/" className="flex flex-col leading-none">
-            <span className="text-[15px] lg:text-base font-bold tracking-[0.18em] text-(--nous-erebus)">
-              NOUS
-            </span>
-            <span className="hidden sm:block text-[11px] tracking-[0.12em] text-(--nous-titan) mt-1">
-              Multimodal Intelligence
-            </span>
-          </Link>
+    // Gutter on the nav, max width inside, the same as the sections below, so
+    // the wordmark sits on the content's left edge at every width.
+    <nav
+      className="h-14 lg:h-16 px-6 border-b border-(--nous-enceladus)"
+      style={UI}
+    >
+      <div className="max-w-7xl mx-auto h-full flex items-center justify-between">
+        <Link
+          href="/"
+          className="flex flex-col leading-none rounded-sm transition-opacity hover:opacity-75 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
+        >
+          <span className="text-[15px] lg:text-base font-bold tracking-[0.18em] text-(--nous-erebus)">
+            NOUS
+          </span>
+          <span className="hidden sm:block text-[11px] tracking-[0.12em] text-(--nous-titan) mt-1">
+            Multimodal Intelligence
+          </span>
+        </Link>
 
-          <div className="flex items-center gap-4 sm:gap-7 text-sm">
-            <a
-              href="#what"
-              className="hidden sm:inline-flex text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
+        <div className="flex items-center gap-4 sm:gap-7 text-sm">
+          <a
+            href="#what"
+            className="hidden sm:inline-flex text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
+          >
+            What it does
+          </a>
+          {isAuthenticated ? (
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
             >
-              What it does
-            </a>
-            {isAuthenticated ? (
+              Open dashboard
+            </Link>
+          ) : (
+            <>
               <Link
-                href="/dashboard"
+                href="/login"
+                className="text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/register"
                 className="inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
               >
-                Open dashboard
+                Get started
               </Link>
-            ) : (
-              <>
-                <Link
-                  href="/login"
-                  className="text-(--nous-titan) hover:text-(--nous-erebus) transition-colors rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  href="/register"
-                  className="inline-flex items-center h-9 px-4 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
-                >
-                  Get started
-                </Link>
-              </>
-            )}
-          </div>
+            </>
+          )}
         </div>
-      </nav>
+      </div>
+    </nav>
+  );
+}
 
-      <section className="px-6 py-16 lg:pt-32 lg:pb-28">
-        {/* CSS entrance, not framer-motion: an `initial={{ opacity: 0 }}` on
+export function HeroSection({
+  isAuthenticated,
+}: HeroSectionProps): ReactElement {
+  return (
+    <section className="px-6 py-16 lg:pt-32 lg:pb-28">
+      {/* CSS entrance, not framer-motion: an `initial={{ opacity: 0 }}` on
             the SSR markup leaves the hero invisible until hydration, which on
             a slow load is seconds of blank page and a late LCP. */}
-        <div className="max-w-7xl mx-auto grid lg:grid-cols-[8fr_3fr] lg:gap-24 animate-in fade-in-0 slide-in-from-bottom-4 duration-500 motion-reduce:animate-none">
-          <div>
-            <div
-              aria-hidden="true"
-              className="w-10 lg:w-14 h-[3px] bg-(--nous-sol) mb-7 lg:mb-10"
-            />
+      <div className="max-w-7xl mx-auto grid lg:grid-cols-[8fr_3fr] lg:gap-24 animate-in fade-in-0 slide-in-from-bottom-4 duration-500 motion-reduce:animate-none">
+        <div>
+          <div
+            aria-hidden="true"
+            className="w-10 lg:w-14 h-[3px] bg-(--nous-sol) mb-7 lg:mb-10"
+          />
 
-            <h1
-              className="text-5xl lg:text-[96px] font-normal tracking-[-0.02em] leading-none text-(--nous-erebus) text-pretty mb-6 lg:mb-9"
-              style={SERIF}
-            >
-              Knowledge that{' '}
-              <em className="italic text-(--nous-sol-safe)">answers back.</em>
-            </h1>
+          <h1
+            className="text-5xl lg:text-[96px] font-normal tracking-[-0.02em] leading-none text-(--nous-erebus) text-pretty mb-6 lg:mb-9"
+            style={SERIF}
+          >
+            Knowledge that{' '}
+            <em className="italic text-(--nous-sol-safe)">answers back.</em>
+          </h1>
 
-            <p
-              className="text-lg lg:text-[22px] leading-[1.6] text-(--nous-titan) max-w-[52ch] mb-8 lg:mb-11"
-              style={SERIF}
-            >
-              A research instrument for people who read for a living. NOUS
-              retrieves across your papers and documents, reasons over a
-              knowledge graph, and footnotes every claim
-              <sup className={FOOTNOTE_MARK} style={UI}>
-                1
-              </sup>{' '}
-              so you can check its work
-              <sup className={FOOTNOTE_MARK} style={UI}>
-                2
-              </sup>{' '}
-              before you build on it.
-            </p>
+          <p
+            className="text-lg lg:text-[22px] leading-[1.6] text-(--nous-titan) max-w-[52ch] mb-8 lg:mb-11"
+            style={SERIF}
+          >
+            A research instrument for people who read for a living. NOUS
+            retrieves across your papers and documents, reasons over a knowledge
+            graph, and footnotes every claim
+            <sup className={FOOTNOTE_MARK} style={UI}>
+              1
+            </sup>{' '}
+            so you can check its work
+            <sup className={FOOTNOTE_MARK} style={UI}>
+              2
+            </sup>{' '}
+            before you build on it.
+          </p>
 
-            <div
-              className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6 text-sm"
-              style={UI}
-            >
-              <Link
-                href={isAuthenticated ? '/dashboard' : '/register'}
-                className="group inline-flex w-full sm:w-auto items-center justify-center gap-2 h-12 px-7 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
-              >
-                {isAuthenticated ? 'Open dashboard' : 'Get started'}
-                <ArrowRight
-                  className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
-                  aria-hidden="true"
-                />
-              </Link>
-              <a
-                href="#what"
-                className="inline-flex items-center min-h-11 sm:min-h-0 font-medium text-(--nous-sol-safe) border-b border-(--nous-sol) pb-0.5 hover:text-(--nous-erebus) transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
-              >
-                Read how it works
-              </a>
-            </div>
-          </div>
-
-          {/* Marginalia. A right-hand column at lg, a ruled block under the
-              CTAs on narrow screens — same DOM order either way. */}
-          <aside
-            className="mt-10 pt-6 border-t border-(--nous-enceladus) flex flex-col gap-4 text-[13px] leading-[1.55] text-(--nous-titan) lg:mt-0 lg:pt-11 lg:gap-7 lg:border-t-0 lg:border-l lg:border-(--nous-enceladus) lg:pl-7"
+          <div
+            className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6 text-sm"
             style={UI}
           >
-            {MARGIN_NOTES.map((note) => (
-              <div
-                key={note.text}
-                className={`grid grid-cols-[16px_1fr] gap-2 ${
-                  note.mark ? '' : 'text-(--nous-fg-3)'
-                }`}
-              >
-                <span className="font-semibold text-(--nous-sol-safe)">
-                  {note.mark}
-                </span>
-                <span>{note.text}</span>
-              </div>
-            ))}
-          </aside>
+            <Link
+              href={isAuthenticated ? '/dashboard' : '/register'}
+              className="group inline-flex w-full sm:w-auto items-center justify-center gap-2 h-12 px-7 rounded-(--nous-radius-md) font-semibold bg-(--nous-erebus) text-(--nous-selene) transition-opacity hover:opacity-90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50 focus-visible:ring-offset-2 focus-visible:ring-offset-(--nous-selene)"
+            >
+              {isAuthenticated ? 'Open dashboard' : 'Get started'}
+              <ArrowRight
+                className="w-4 h-4 transition-transform group-hover:translate-x-0.5"
+                aria-hidden="true"
+              />
+            </Link>
+            <a
+              href="#what"
+              className="inline-flex items-center min-h-11 sm:min-h-0 font-medium text-(--nous-sol-safe) border-b border-(--nous-sol) pb-0.5 hover:text-(--nous-erebus) transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)/50"
+            >
+              Read how it works
+            </a>
+          </div>
         </div>
-      </section>
-    </>
+
+        {/* Marginalia. A right-hand column at lg, a ruled block under the
+              CTAs on narrow screens — same DOM order either way. */}
+        <aside
+          className="mt-10 pt-6 border-t border-(--nous-enceladus) flex flex-col gap-4 text-[13px] leading-[1.55] text-(--nous-titan) lg:mt-0 lg:pt-11 lg:gap-7 lg:border-t-0 lg:border-l lg:border-(--nous-enceladus) lg:pl-7"
+          style={UI}
+        >
+          {MARGIN_NOTES.map((note) => (
+            <div
+              key={note.text}
+              className={`grid grid-cols-[16px_1fr] gap-2 ${
+                note.mark ? '' : 'text-(--nous-fg-3)'
+              }`}
+            >
+              <span className="font-semibold text-(--nous-sol-safe)">
+                {note.mark}
+              </span>
+              <span>{note.text}</span>
+            </div>
+          ))}
+        </aside>
+      </div>
+    </section>
   );
 }

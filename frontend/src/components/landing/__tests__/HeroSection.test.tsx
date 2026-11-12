@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { HeroSection } from '@/components/landing/HeroSection';
+import { render, screen, type RenderResult } from '@testing-library/react';
+import { HeroSection, LandingNav } from '@/components/landing/HeroSection';
+
+// The nav and the hero section are separate exports so app/page.tsx can put
+// the hero inside <main> with the nav outside it.
+function renderTop(isAuthenticated: boolean): RenderResult {
+  return render(
+    <>
+      <LandingNav isAuthenticated={isAuthenticated} />
+      <HeroSection isAuthenticated={isAuthenticated} />
+    </>
+  );
+}
 
 describe('HeroSection', () => {
   it('sends signed-out visitors to register and login', () => {
-    render(<HeroSection isAuthenticated={false} />);
+    renderTop(false);
 
     const getStarted = screen.getAllByRole('link', { name: /get started/i });
     expect(getStarted.length).toBeGreaterThan(0);
@@ -21,7 +32,7 @@ describe('HeroSection', () => {
   });
 
   it('sends signed-in visitors to the dashboard', () => {
-    render(<HeroSection isAuthenticated />);
+    renderTop(true);
 
     const dashboard = screen.getAllByRole('link', { name: /open dashboard/i });
     expect(dashboard.length).toBeGreaterThan(0);
@@ -31,5 +42,14 @@ describe('HeroSection', () => {
     expect(
       screen.queryByRole('link', { name: /sign in/i })
     ).not.toBeInTheDocument();
+  });
+
+  it('gives the wordmark link the house focus ring and a hover state', () => {
+    render(<LandingNav isAuthenticated={false} />);
+    const wordmark = screen.getByRole('link', { name: /^NOUS/ });
+    expect(wordmark).toHaveAttribute('href', '/');
+    expect(wordmark.className).toContain('focus-visible:ring-2');
+    expect(wordmark.className).toContain('focus-visible:ring-(--nous-sol)/50');
+    expect(wordmark.className).toMatch(/hover:/);
   });
 });
