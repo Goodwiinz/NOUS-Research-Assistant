@@ -506,6 +506,10 @@ jobs:
           files: coverage.xml
           flags: unit
           name: unit-tests
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Upload only the named report; auto-discovery also swept in
+          # unrelated *coverage*.json files under docs/.
+          disable_search: true
       - name: Upload test results to Codecov (unit)
         if: always()
         uses: ./.github/actions/codecov-test-results
@@ -818,6 +822,10 @@ jobs:
           files: frontend/coverage/lcov.info
           flags: frontend
           name: frontend-tests
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Upload only the named report; auto-discovery also swept in
+          # unrelated *coverage*.json files under docs/.
+          disable_search: true
       - name: Upload test results to Codecov (frontend)
         # vitest.config.mts emits coverage/junit-vitest.xml only under CI.
         if: always()
@@ -1059,6 +1067,10 @@ jobs:
           files: coverage.xml
           flags: integration
           name: integration-tests-${{ matrix.shard }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Upload only the named report; auto-discovery also swept in
+          # unrelated *coverage*.json files under docs/.
+          disable_search: true
       - name: Upload test results to Codecov (integration)
         if: always()
         uses: ./.github/actions/codecov-test-results
@@ -1134,6 +1146,10 @@ jobs:
           files: coverage.xml
           flags: resilience
           name: resilience-tests
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Upload only the named report; auto-discovery also swept in
+          # unrelated *coverage*.json files under docs/.
+          disable_search: true
       - name: Upload test results to Codecov (resilience)
         if: always()
         uses: ./.github/actions/codecov-test-results

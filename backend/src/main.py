@@ -9,6 +9,7 @@ load_dotenv()
 import asyncio
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -757,15 +758,28 @@ app.include_router(
 app.include_router(health_router)
 
 
+_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
 # Health check endpoint
 # Unauthenticated: never add VERSION/ENVIRONMENT here or to `/` (audit I17).
+# The one exception is opt-in: with HEALTH_EXPOSE_BUILD_SHA (default False,
+# dev sets it in values-aws.yaml) the body also carries ``git_sha``, the image's
+# baked-in GIT_SHA, so the CI7 deploy gate can prove which build serves. It is
+# returned only when it is exactly 40 lowercase hex characters; any other value
+# (unset, "unknown", malformed) leaves the body unchanged.
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
+    body: dict[str, str] = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if settings.HEALTH_EXPOSE_BUILD_SHA:
+        git_sha = os.getenv("GIT_SHA") or ""
+        if _GIT_SHA_RE.fullmatch(git_sha):
+            body["git_sha"] = git_sha
+    return body
 
 
 # Root endpoint
