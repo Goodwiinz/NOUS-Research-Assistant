@@ -576,6 +576,8 @@ def delete_relationship(
         if not success:
             raise HTTPException(status_code=404, detail="Relationship not found")
         return {"message": "Relationship deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting relationship: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

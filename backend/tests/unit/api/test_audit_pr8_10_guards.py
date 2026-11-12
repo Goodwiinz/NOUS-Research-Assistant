@@ -155,7 +155,8 @@ def test_note_payload_bounds() -> None:
 def test_draft_export_filename_and_latex_escape() -> None:
     src = _read("src/services/research/draft_generation_service.py")
     assert "_safe_filename(draft.title" in src
-    assert "_latex_escape(markdown_content)" in src
+    # LaTeX escaping is covered behaviourally in
+    # tests/unit/services/test_draft_latex_export.py.
     assert "draft.title.replace(' ', '_')" not in src
 
 
