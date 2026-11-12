@@ -69,7 +69,9 @@ def _snapshot(*, user_id: str, thread_id: str, **overrides: Any) -> SimpleNamesp
     )
 
 
-def _receipt(snapshot: SimpleNamespace, *, thread_id: str, job_id: str, user) -> str:
+def _receipt(
+    snapshot: SimpleNamespace, *, thread_id: str, job_id: str, user: Any
+) -> str:
     approval = pending_approval(
         snapshot, thread_id=thread_id, run_id=job_id, user_id=user.id
     )
@@ -77,7 +79,9 @@ def _receipt(snapshot: SimpleNamespace, *, thread_id: str, job_id: str, user) ->
     return approval.approval_id
 
 
-def _graph_returning(snapshot: Optional[SimpleNamespace]):
+def _graph_returning(
+    snapshot: Optional[SimpleNamespace],
+) -> tuple[Any, Any, Any, MagicMock]:
     graph = MagicMock()
     graph.aget_state = AsyncMock(return_value=snapshot)
     return (
@@ -94,7 +98,14 @@ def _graph_returning(snapshot: Optional[SimpleNamespace]):
     )
 
 
-async def _recover(snapshot, *, job_id, thread_id, approval_id, user):
+async def _recover(
+    snapshot: Optional[SimpleNamespace],
+    *,
+    job_id: str,
+    thread_id: str,
+    approval_id: str,
+    user: Any,
+) -> tuple[Optional[dict[str, Any]], MagicMock]:
     p1, p2, p3, graph = _graph_returning(snapshot)
     with p1, p2, p3:
         payload = await recover_confirm_request_payload(
@@ -186,7 +197,7 @@ async def test_checkpoint_for_a_different_thread_is_refused() -> None:
 
 
 @pytest.mark.parametrize("snapshot", [None, SimpleNamespace(values={}, tasks=())])
-async def test_empty_checkpoint_is_refused(snapshot) -> None:
+async def test_empty_checkpoint_is_refused(snapshot: Optional[SimpleNamespace]) -> None:
     payload, _ = await _recover(
         snapshot,
         job_id=str(uuid4()),
@@ -244,7 +255,7 @@ class _NxRedis:
         return True
 
 
-def _running_record(user) -> dict:
+def _running_record(user: Any) -> dict:
     return {
         "status": JobStatus.RUNNING,
         "user_id": str(user.id),
