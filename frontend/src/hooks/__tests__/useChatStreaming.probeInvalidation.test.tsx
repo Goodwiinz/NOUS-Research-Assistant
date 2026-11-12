@@ -317,6 +317,33 @@ describe('useChatStreaming cold-load probe invalidation', () => {
         (next as ChatPageMessage[]).some((m) => m.error !== undefined)
     );
     expect(renderedError).toBe(false);
+    // The persisted row's id is unknown (no done frame), so the reconcile
+    // must not expect the synthetic resume runtime id: that expectation can
+    // never match and would leave the thread stale beside the placeholder.
+    const threadARefreshes = refreshMessages.mock.calls.filter(
+      ([t]) => t === 'thread-A'
+    );
+    expect(threadARefreshes.length).toBeGreaterThan(0);
+    for (const [, expected] of threadARefreshes) {
+      expect(
+        (expected as { runtimeId?: string } | undefined)?.runtimeId
+      ).toBeUndefined();
+    }
+    // The streaming placeholder is dropped, not left beside the server row.
+    // setMessages takes arrays or updaters; replay them to get the result.
+    const rendered = setMessages.mock.calls.reduce<ChatPageMessage[]>(
+      (prev, [next]) =>
+        typeof next === 'function'
+          ? (next as (p: ChatPageMessage[]) => ChatPageMessage[])(prev)
+          : (next as ChatPageMessage[]),
+      []
+    );
+    expect(rendered.some((m) => m.isStreaming === true)).toBe(false);
+    expect(
+      rendered.some(
+        (m) => m.source === 'optimistic' && m.isStreaming === true
+      )
+    ).toBe(false);
     // The seeded run is settled, not left 'running' forever.
     expect(useAgentActivityStore.getState().runs['thread-A']).toBeUndefined();
 

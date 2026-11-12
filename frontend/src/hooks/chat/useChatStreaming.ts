@@ -1128,6 +1128,12 @@ export function useChatStreaming(
        * reconstruction must not be shown as this turn's answer — the reconcile
        * that follows brings the complete server row instead. */
       suppressCommit?: () => boolean;
+      /** Resume: consulted once the stream ends. True means the replay never
+       * reached a terminal frame and the turn must yield entirely to the
+       * server rows: drop the placeholder and reconcile with no assistant
+       * expectation (the persisted row's id is unknown without a done frame,
+       * so expecting the synthetic runtime id would never be met). */
+      abandonTurn?: () => boolean;
       /** Resume: a failed reattach must leave the activity run 'running' so
        * re-activating the thread can try again — the run itself may well
        * still be alive on the backend. */
@@ -1148,6 +1154,7 @@ export function useChatStreaming(
         assistantRuntimeId,
         quietWhenEmpty,
         suppressCommit,
+        abandonTurn,
         keepRunOnFailure,
         preserveRunId,
         authRecoveryAttempt,
@@ -1749,6 +1756,22 @@ export function useChatStreaming(
           );
           if (!isCurrentSession()) return;
           setIsLoading(false);
+          return;
+        }
+
+        if (abandonTurn?.()) {
+          if (isTurnDisplayed()) {
+            setMessages(
+              replacePreservingApproval(withoutReplacementMarkers(newMessages))
+            );
+          }
+          resetStreamingTurnState();
+          if (isCurrentSession() && turnThreadId) {
+            await useChatStore.getState().refreshMessages(turnThreadId);
+          }
+          if (!isCurrentSession()) return;
+          setIsLoading(false);
+          activeRunThreadRef.current = null;
           return;
         }
 
@@ -2711,7 +2734,8 @@ export function useChatStreaming(
       newMessages: messages,
       assistantRuntimeId: `resume:${threadId}:${run.startedAt}`,
       quietWhenEmpty: true,
-      suppressCommit: () => replayGapSeen || handOffUnsettled,
+      suppressCommit: () => replayGapSeen,
+      abandonTurn: () => handOffUnsettled,
       keepRunOnFailure: true,
       preserveRunId: true,
       start: async (streamCallbacks, signal) => {
@@ -2792,8 +2816,9 @@ export function useChatStreaming(
           // no terminal frame, so every replay ends without one. This page
           // never saw that run fail, so no error bubble, and no 'running'
           // record left behind to block the next activation's probe. Commit
-          // nothing locally; runStreamTurn's reconcile (refreshMessages)
-          // brings the persisted stopped partial instead.
+          // nothing locally: abandonTurn drops the placeholder and reconciles
+          // (refreshMessages, no assistant expectation) to the persisted
+          // stopped partial instead.
           console.warn(
             '[Chat] Reload hand-off ended without a terminal frame; reconciling from the server:',
             lastError
