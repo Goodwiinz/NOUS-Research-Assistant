@@ -785,6 +785,62 @@ async def _cas_in_memory(
     return "claimed"
 
 
+async def restore_confirmation_mirror(job_id: str, data: dict) -> str:
+    """Re-create a lost job record for a confirmation PostgreSQL already won.
+
+    ``/confirm`` claims the run in PostgreSQL first; Redis is only the
+    cross-worker mirror and the request-payload carrier the resume reads. When
+    that record is gone (flush/failover inside the 24h awaiting window) and the
+    caller rebuilt the payload from durable state, this writes *data* only if
+    NO record exists — a record that reappeared (a delayed worker or Stop
+    write) is never clobbered.
+
+    Returns ``"claimed"`` (record written) or ``"conflict"`` (a record exists;
+    the caller must back out). Shared deployments without Redis raise
+    :class:`ConfirmationCoordinationUnavailable`, like ``compare_and_set_status``.
+    """
+    global _seq
+
+    record = dict(data)
+    record["_confirmation_claim_id"] = uuid4().hex
+    record["created_at"] = time.time()
+    with _l1_lock:
+        _seq += 1
+        record["_seq"] = _seq
+
+    redis_client = await _get_redis()
+    if redis_client is None:
+        if not process_local_confirmation_coordination_allowed():
+            raise ConfirmationCoordinationUnavailable(
+                "Distributed confirmation coordination is unavailable"
+            )
+    else:
+        from redis.exceptions import RedisError
+
+        try:
+            written = await redis_client.set(
+                f"{_JOB_KEY_PREFIX}{job_id}",
+                _json.dumps(record, default=str),
+                ex=_job_ttl_seconds(record.get("status")),
+                nx=True,
+            )
+        except (RedisError, OSError, asyncio.TimeoutError) as exc:
+            raise ConfirmationCoordinationUnavailable(
+                "Distributed confirmation coordination is unavailable"
+            ) from exc
+        if not written:
+            return "conflict"
+
+    with _l1_lock:
+        existing = _l1.get(job_id)
+        if redis_client is None and existing is not None:
+            if not _l1_entry_expired(existing, time.time()):
+                return "conflict"
+        _l1[job_id] = record
+        _l1.move_to_end(job_id)
+    return "claimed"
+
+
 async def compare_and_set_status(
     job_id: str,
     expected: JobStatus | str,

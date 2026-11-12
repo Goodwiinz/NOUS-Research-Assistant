@@ -390,7 +390,11 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
     scanned = failed = repaired = skipped = cancelled = 0
     async with AsyncSessionLocal() as db:
         candidates = await agent_run_service.list_stale_runs(
-            db, updated_before=cutoff, limit=100, now=now
+            db,
+            updated_before=cutoff,
+            awaiting_updated_before=awaiting_cutoff,
+            limit=100,
+            now=now,
         )
         for candidate in candidates:
             scanned += 1
@@ -408,6 +412,7 @@ async def _sweep_stale_agent_runs(*, lease_owner: str) -> dict:
                 if listed_status is JobStatus.AWAITING_CONFIRMATION and (
                     listed_updated_at is None or listed_updated_at >= awaiting_cutoff
                 ):
+                    # Backstop: list_stale_runs already filters these out.
                     skipped += 1  # still within the confirmable window
                     continue
                 claimed = await agent_run_service.claim_lease(

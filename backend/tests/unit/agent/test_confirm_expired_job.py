@@ -134,3 +134,197 @@ def test_live_job_payload_still_confirms(
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == JobStatus.RUNNING
+
+
+# ---------------------------------------------------------------------------
+# R2-H3 follow-up: rebuild the lost payload from durable state
+# ---------------------------------------------------------------------------
+
+
+def _parked_run(user: Mock, thread_id: str | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        status=JobStatus.AWAITING_CONFIRMATION.value,
+        user_id=user.id,
+        thread_id=thread_id,
+    )
+
+
+def _recovered_payload(thread_id: str) -> dict:
+    return {
+        "thread_id": thread_id,
+        "messages": [{"role": "user", "content": "ingest the paper"}],
+        "page_context": {"type": "chat"},
+        "model": "",
+    }
+
+
+def _redis_lost(monkeypatch: pytest.MonkeyPatch, run: SimpleNamespace) -> None:
+    monkeypatch.setattr(
+        "src.services.agent.job_store.get_job_fresh", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "src.services.agent.agent_run_service.get_run", AsyncMock(return_value=run)
+    )
+    monkeypatch.setattr(
+        "src.services.agent.job_store.compare_and_set_status",
+        AsyncMock(return_value="missing"),
+    )
+
+
+def test_lost_payload_is_rebuilt_from_durable_state_and_resumes(
+    client: TestClient, user: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Redis flush inside the 24h window must not strand the run: the
+    thread id comes from the tenant-filtered agent_runs row, the payload from
+    the checkpoint, and the mirror is restored before the resume runs."""
+    job_id, thread_id = str(uuid4()), str(uuid4())
+    approval_id = "b" * 64
+    _redis_lost(monkeypatch, _parked_run(user, thread_id))
+    recover = AsyncMock(return_value=_recovered_payload(thread_id))
+    monkeypatch.setattr(execute_mod, "recover_confirm_request_payload", recover)
+    claim = AsyncMock(return_value=True)
+    monkeypatch.setattr(execute_mod, "claim_awaiting_run_for_confirmation", claim)
+    restore = AsyncMock(return_value="claimed")
+    monkeypatch.setattr(
+        "src.services.agent.job_store.restore_confirmation_mirror", restore
+    )
+    resume = MagicMock()
+    monkeypatch.setattr(execute_mod, "_resume_agent_graph", resume)
+
+    response = client.post(
+        f"/api/v1/agent/confirm/{job_id}",
+        json={"approval_id": approval_id, "confirmed": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == JobStatus.RUNNING
+    recover.assert_awaited_once_with(
+        job_id=job_id,
+        thread_id=thread_id,
+        approval_id=approval_id,
+        current_user=user,
+    )
+    claim.assert_awaited_once()
+    restore.assert_awaited_once()
+    restored_job_id, restored = restore.await_args.args
+    assert restored_job_id == job_id
+    assert restored["status"] == JobStatus.RUNNING
+    assert restored["user_id"] == str(user.id)
+    assert restored["thread_id"] == thread_id
+    assert restored["request"] == _recovered_payload(thread_id)
+    resume.assert_called_once()
+
+
+def test_unrecoverable_checkpoint_still_refuses_before_the_claim(
+    client: TestClient, user: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checkpoint missing, owned by someone else, or its interrupt does not
+    match the approval: the helper returns None and R7-L13 still holds."""
+    _redis_lost(monkeypatch, _parked_run(user, str(uuid4())))
+    monkeypatch.setattr(
+        execute_mod, "recover_confirm_request_payload", AsyncMock(return_value=None)
+    )
+    claim = AsyncMock(return_value=True)
+    monkeypatch.setattr(execute_mod, "claim_awaiting_run_for_confirmation", claim)
+
+    response = client.post(
+        f"/api/v1/agent/confirm/{uuid4()}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
+
+    assert response.status_code == 409
+    assert "expired" in response.json()["detail"].lower()
+    claim.assert_not_awaited()
+
+
+def test_threadless_run_is_never_rebuilt_from_job_id(
+    client: TestClient, user: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No durable thread id → no rebuild. job_id is never used as a thread
+    id (the R7-L13 fallback stays dead)."""
+    _redis_lost(monkeypatch, _parked_run(user, None))
+    recover = AsyncMock(return_value=_recovered_payload(str(uuid4())))
+    monkeypatch.setattr(execute_mod, "recover_confirm_request_payload", recover)
+    monkeypatch.setattr(execute_mod, "_resume_agent_graph", MagicMock())
+    claim = AsyncMock(return_value=True)
+    monkeypatch.setattr(execute_mod, "claim_awaiting_run_for_confirmation", claim)
+
+    response = client.post(
+        f"/api/v1/agent/confirm/{uuid4()}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
+
+    assert response.status_code == 409
+    recover.assert_not_awaited()
+    claim.assert_not_awaited()
+
+
+def test_rebuilt_confirm_still_loses_to_the_postgres_claim(
+    client: TestClient, user: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Double-confirm and confirm-after-cancel: PostgreSQL refuses the claim,
+    so the rebuilt payload never restores the mirror or resumes anything."""
+    thread_id = str(uuid4())
+    _redis_lost(monkeypatch, _parked_run(user, thread_id))
+    monkeypatch.setattr(
+        execute_mod,
+        "recover_confirm_request_payload",
+        AsyncMock(return_value=_recovered_payload(thread_id)),
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "claim_awaiting_run_for_confirmation",
+        AsyncMock(return_value=False),
+    )
+    restore = AsyncMock(return_value="claimed")
+    monkeypatch.setattr(
+        "src.services.agent.job_store.restore_confirmation_mirror", restore
+    )
+    resume = MagicMock()
+    monkeypatch.setattr(execute_mod, "_resume_agent_graph", resume)
+
+    response = client.post(
+        f"/api/v1/agent/confirm/{uuid4()}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Job is not awaiting confirmation"
+    restore.assert_not_awaited()
+    resume.assert_not_called()
+
+
+def test_reappeared_mirror_backs_out_the_rebuilt_confirm(
+    client: TestClient, user: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record that reappeared between the read and the restore (a delayed
+    worker or Stop write) wins: release the claim, 409, no resume."""
+    thread_id = str(uuid4())
+    _redis_lost(monkeypatch, _parked_run(user, thread_id))
+    monkeypatch.setattr(
+        execute_mod,
+        "recover_confirm_request_payload",
+        AsyncMock(return_value=_recovered_payload(thread_id)),
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "claim_awaiting_run_for_confirmation",
+        AsyncMock(return_value=True),
+    )
+    release = AsyncMock(return_value=True)
+    monkeypatch.setattr(execute_mod, "release_confirmation_claim", release)
+    monkeypatch.setattr(
+        "src.services.agent.job_store.restore_confirmation_mirror",
+        AsyncMock(return_value="conflict"),
+    )
+    resume = MagicMock()
+    monkeypatch.setattr(execute_mod, "_resume_agent_graph", resume)
+
+    response = client.post(
+        f"/api/v1/agent/confirm/{uuid4()}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
+
+    assert response.status_code == 409
+    release.assert_awaited_once()
+    resume.assert_not_called()
