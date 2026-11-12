@@ -45,6 +45,7 @@ import {
   resolveBoundProjectId,
   selectCurrentThreadProjectId,
   useChatStore,
+  type RefreshExpectation,
 } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
@@ -199,6 +200,7 @@ export function toCitationCreate(ctx: Record<string, unknown>): CitationCreate {
 /** Reattach attempts per thread activation, and the waits between them. A
  * proxy-killed resume is usually transient; the run itself keeps going. */
 const RESUME_MAX_ATTEMPTS = 3;
+type RefreshDiagnostic = NonNullable<RefreshExpectation['diagnostic']>;
 const RESUME_BACKOFF_MS = [1_000, 4_000];
 const MAX_PROGRESS_STEPS = 16;
 const MAX_REASONING_SUMMARY_CHARS = 8_000;
@@ -1164,7 +1166,7 @@ export function useChatStreaming(
       // thread is displayed while a background turn streams — per-thread
       // streaming state is the upgrade path if that becomes noticeable.
       const turnThreadId = currentThreadId;
-      const isTurnDisplayed = () =>
+      const isTurnDisplayed = (): boolean =>
         isCurrentSession() &&
         useChatStore.getState().currentThreadId === turnThreadId;
       const userRuntimeId = [...newMessages]
@@ -1173,12 +1175,14 @@ export function useChatStreaming(
           (message) =>
             message.role === 'user' && message.source !== 'local-only'
         )?.runtimeId;
-      const reconciliationDiagnostic = (terminalReason: string) => ({
+      const reconciliationDiagnostic = (
+        terminalReason: string
+      ): RefreshDiagnostic => ({
         terminalReason,
         localCount: newMessages.length,
         completedInBackground: !isTurnDisplayed(),
       });
-      const reconcileUser = (terminalReason: string) =>
+      const reconcileUser = (terminalReason: string): Promise<boolean> =>
         isCurrentSession() && turnThreadId
           ? useChatStore.getState().refreshMessages(
               turnThreadId,
@@ -1196,7 +1200,7 @@ export function useChatStreaming(
           client_message_id?: string | null;
         },
         terminalReason: string
-      ) =>
+      ): Promise<boolean> =>
         isCurrentSession() && turnThreadId
           ? useChatStore.getState().refreshMessages(turnThreadId, {
               persistedId: doneIds.assistant_message_id ?? undefined,
@@ -2825,8 +2829,25 @@ export function useChatStreaming(
     probeAbortRef.current = probeAbort;
     // The probe is confirmation-only. If the replay opens with anything else,
     // this thread has a LIVE run server-side — keeping the probe attached
-    // would consume that run's frames into the void, so bail immediately.
-    const abandonProbe = (): void => probeAbort.abort();
+    // would consume that run's frames into the void, so let go of it. After a
+    // hard refresh the activity store is empty, so merely letting go left the
+    // chat detached for the rest of the run: hand the run to the resume
+    // effect instead, which reattaches from cursor 0 with gap handling (the
+    // same hand-off the Codex branch below does). The server stays the source
+    // of truth; nothing is persisted client-side. The abort makes this fire
+    // once per probe, and a thread the user has since left is not seeded.
+    let probeRunId: string | undefined;
+    const handOffLiveRun = (): void => {
+      if (probeAbort.signal.aborted) return;
+      probeAbort.abort();
+      // A Codex run is handed off by its durable run_id in onRunId below.
+      if (harnessConnectionRef.current.executionProvider === 'codex') return;
+      if (useChatStore.getState().currentThreadId !== threadId) return;
+      const activity = useAgentActivityStore.getState();
+      activity.startRun(threadId, deriveAgentName(), 'resumed after reload');
+      if (probeRunId) activity.setRunId(threadId, probeRunId);
+      setResumeNonce((n) => n + 1);
+    };
     void Promise.resolve(
       agentChatService.resumeStream(
         threadId,
@@ -2868,6 +2889,9 @@ export function useChatStreaming(
           onRunId: (runId) => {
             if (probeAbort.signal.aborted) return;
             if (harnessConnectionRef.current.executionProvider !== 'codex') {
+              // Keep it for the non-Codex hand-off so Stop can target the
+              // durable run once the resume effect owns the stream.
+              probeRunId = runId;
               return;
             }
             probeAbort.abort();
@@ -2876,10 +2900,10 @@ export function useChatStreaming(
             activity.setRunId(threadId, runId);
             setResumeNonce((n) => n + 1);
           },
-          onToken: abandonProbe,
-          onToolStart: abandonProbe,
-          onStatus: abandonProbe,
-          onPlan: abandonProbe,
+          onToken: handOffLiveRun,
+          onToolStart: handOffLiveRun,
+          onStatus: handOffLiveRun,
+          onPlan: handOffLiveRun,
         },
         probeAbort.signal
       )
@@ -2925,7 +2949,7 @@ export function useChatStreaming(
         // thread still being displayed — the resumed answer is persisted
         // server-side regardless, so a skipped local write is not lost (mirrors
         // handleSubmit's isTurnDisplayed guard).
-        const isConfirmDisplayed = () =>
+        const isConfirmDisplayed = (): boolean =>
           isCurrentSession() &&
           confirmationBelongsToThread(
             pendingConfirmation,
@@ -2950,12 +2974,16 @@ export function useChatStreaming(
             .getState()
             .setRunId(confirmationThreadId, carriedRunId);
         }
-        const confirmationDiagnostic = (terminalReason: string) => ({
+        const confirmationDiagnostic = (
+          terminalReason: string
+        ): RefreshDiagnostic => ({
           terminalReason,
           localCount: messages.length,
           completedInBackground: !isConfirmDisplayed(),
         });
-        const reconcileConfirmationUser = (terminalReason: string) =>
+        const reconcileConfirmationUser = (
+          terminalReason: string
+        ): Promise<boolean> =>
           isCurrentSession() && confirmationThreadId
             ? useChatStore.getState().refreshMessages(
                 confirmationThreadId,
@@ -2973,7 +3001,7 @@ export function useChatStreaming(
             client_message_id?: string | null;
           },
           terminalReason: string
-        ) =>
+        ): Promise<boolean> =>
           isCurrentSession() && confirmationThreadId
             ? useChatStore.getState().refreshMessages(confirmationThreadId, {
                 persistedId: done.assistant_message_id ?? undefined,

@@ -3,6 +3,10 @@
  * submit makes it stale (its late confirmation frame armed a phantom gate),
  * and must detach immediately when the replay shows a live run instead of a
  * parked confirmation.
+ *
+ * A2: detaching is not enough on its own. After a hard refresh the activity
+ * store is empty, so the live run must be handed to the resume effect, which
+ * reattaches from cursor 0. Otherwise the chat never shows the run again.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -51,6 +55,8 @@ import { useAgentActivityStore } from '@/stores/agentActivityStore';
 type ProbeCallbacks = {
   onConfirmation: (threadId: string, c: Record<string, unknown>) => void;
   onToken?: (t: string) => void;
+  onToolStart?: (name: string) => void;
+  onStatus?: (phase: string, detail?: string) => void;
 };
 
 function makeParams(): Record<string, unknown> {
@@ -128,7 +134,7 @@ describe('useChatStreaming cold-load probe invalidation', () => {
   });
 
   it('a probe that hits a live run detaches instead of consuming it (L7)', async () => {
-    let probeSignal!: AbortSignal;
+    const signals: AbortSignal[] = [];
     resumeStreamMock.mockImplementation(
       (
         _threadId: string,
@@ -136,7 +142,7 @@ describe('useChatStreaming cold-load probe invalidation', () => {
         cb: ProbeCallbacks,
         signal: AbortSignal
       ) => {
-        probeSignal = signal;
+        signals.push(signal);
         // The replay opens with a token — this is a live run, not a parked
         // confirmation.
         cb.onToken?.('live token');
@@ -154,6 +160,87 @@ describe('useChatStreaming cold-load probe invalidation', () => {
     );
 
     await waitFor(() => expect(resumeStreamMock).toHaveBeenCalled());
-    expect(probeSignal.aborted).toBe(true);
+    expect(signals[0].aborted).toBe(true);
+  });
+
+  it('hands a token-first live run to the resume effect, which reattaches from cursor 0 (A2)', async () => {
+    const signals: AbortSignal[] = [];
+    resumeStreamMock.mockImplementation(
+      (
+        _threadId: string,
+        _afterSeq: number,
+        cb: ProbeCallbacks,
+        signal: AbortSignal
+      ) => {
+        signals.push(signal);
+        if (resumeStreamMock.mock.calls.length === 1) {
+          // Probe: a live run replays several non-confirmation frames. The
+          // hand-off must happen once, not once per frame.
+          cb.onToken?.('live token');
+          cb.onToolStart?.('search_arxiv');
+          cb.onStatus?.('thinking');
+          cb.onToken?.('more');
+        }
+        return new Promise(() => {});
+      }
+    );
+
+    const params = makeParams();
+    renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(2));
+    // The probe let go of the stream...
+    expect(signals[0].aborted).toBe(true);
+    // ...and the resume effect reattached to the same thread from cursor 0.
+    expect(resumeStreamMock.mock.calls[1][0]).toBe('thread-A');
+    expect(resumeStreamMock.mock.calls[1][1]).toBe(0);
+    expect(signals[1].aborted).toBe(false);
+    expect(useAgentActivityStore.getState().runs['thread-A']?.state).toBe(
+      'running'
+    );
+    // Exactly one hand-off per probe.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resumeStreamMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not hand off a live run for a thread that is no longer selected (A2)', async () => {
+    let probeCallbacks!: ProbeCallbacks;
+    resumeStreamMock.mockImplementation(
+      (_threadId: string, _afterSeq: number, cb: ProbeCallbacks) => {
+        if (resumeStreamMock.mock.calls.length === 1) probeCallbacks = cb;
+        return new Promise(() => {});
+      }
+    );
+
+    const params = makeParams();
+    renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
+
+    // The user moves to another thread before thread-A's first frame lands.
+    act(() => {
+      useChatStore.setState({ currentThreadId: 'thread-B' });
+    });
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(2));
+    expect(resumeStreamMock.mock.calls[1][0]).toBe('thread-B');
+
+    act(() => {
+      probeCallbacks.onToken?.('late token for thread-A');
+    });
+
+    expect(useAgentActivityStore.getState().runs['thread-A']).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resumeStreamMock).toHaveBeenCalledTimes(2);
   });
 });
