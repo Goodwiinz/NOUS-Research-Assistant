@@ -75,6 +75,8 @@ interface AgentActivityState {
   setStreamSeq: (threadId: string, seq: number, streamId?: string) => void;
   setRunId: (threadId: string, runId: string) => void;
   finishRun: (threadId: string, state: 'done' | 'error' | 'stopped') => void;
+  /** Forget a thread's run record entirely, as if it was never seeded. */
+  clearRun: (threadId: string) => void;
 }
 
 // Eviction constants — cap unbounded growth of runs and steps
@@ -82,7 +84,7 @@ const MAX_RUNS = 20;
 const MAX_STEPS_PER_RUN = 50;
 
 let seq = 0;
-const nextId = () => `step-${Date.now()}-${++seq}`;
+const nextId = (): string => `step-${Date.now()}-${++seq}`;
 
 export const useAgentActivityStore = create<AgentActivityState>((set) => ({
   runs: {},
@@ -279,6 +281,17 @@ export const useAgentActivityStore = create<AgentActivityState>((set) => ({
         currentThreadId:
           s.currentThreadId === threadId ? null : s.currentThreadId,
         runs: { ...s.runs, [threadId]: { ...run, state, plan, steps } },
+      };
+    }),
+
+  clearRun: (threadId) =>
+    set((s) => {
+      if (!s.runs[threadId]) return s;
+      const { [threadId]: _cleared, ...runs } = s.runs;
+      return {
+        currentThreadId:
+          s.currentThreadId === threadId ? null : s.currentThreadId,
+        runs,
       };
     }),
 }));

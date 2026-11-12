@@ -635,6 +635,9 @@ export function useChatStreaming(
   const confirmationProbedRef = useRef<Set<string>>(new Set());
   const lastActivatedThreadRef = useRef<string | null>(null);
   const probeAbortRef = useRef<AbortController | null>(null);
+  // Threads whose running run was seeded by the cold-load probe's hand-off
+  // (not observed by this page). The resume effect consumes the mark.
+  const handedOffRunRef = useRef<Set<string>>(new Set());
   // Bumped when the cold-load probe seeds a run, so the resume effect (which
   // does not subscribe to the activity store) re-evaluates and takes over.
   const [resumeNonce, setResumeNonce] = useState(0);
@@ -2695,18 +2698,20 @@ export function useChatStreaming(
     if (resumeTriedRef.current.has(threadId)) return;
     resumeTriedRef.current.add(threadId);
     transportFailureRef.current.delete(threadId);
+    const handedOff = handedOffRunRef.current.delete(threadId);
     console.log('[Chat] Resuming in-flight agent stream:', threadId);
     // ponytail: messages is the snapshot at effect time — if thread history
     // is still loading, the resumed commit appends to a stale list; a
     // reload reconciles from the server-persisted rows.
     let replayGapSeen = false;
+    let handOffUnsettled = false;
     void runStreamTurn({
       currentThreadId: threadId,
       currentConversationId: threadId,
       newMessages: messages,
       assistantRuntimeId: `resume:${threadId}:${run.startedAt}`,
       quietWhenEmpty: true,
-      suppressCommit: () => replayGapSeen,
+      suppressCommit: () => replayGapSeen || handOffUnsettled,
       keepRunOnFailure: true,
       preserveRunId: true,
       start: async (streamCallbacks, signal) => {
@@ -2780,6 +2785,24 @@ export function useChatStreaming(
             lastError
           );
         }
+        if (handedOff) {
+          // A run seeded by the reload hand-off was most likely cancelled by
+          // the very disconnect the reload caused: the probe raced the cancel
+          // before it cleared the active pointer, and the cancel path writes
+          // no terminal frame, so every replay ends without one. This page
+          // never saw that run fail, so no error bubble, and no 'running'
+          // record left behind to block the next activation's probe. Commit
+          // nothing locally; runStreamTurn's reconcile (refreshMessages)
+          // brings the persisted stopped partial instead.
+          console.warn(
+            '[Chat] Reload hand-off ended without a terminal frame; reconciling from the server:',
+            lastError
+          );
+          handOffUnsettled = true;
+          useChatStore.getState().markMessagesStale(threadId);
+          useAgentActivityStore.getState().clearRun(threadId);
+          return;
+        }
         throw new Error(lastError);
       },
     });
@@ -2846,6 +2869,7 @@ export function useChatStreaming(
       const activity = useAgentActivityStore.getState();
       activity.startRun(threadId, deriveAgentName(), 'resumed after reload');
       if (probeRunId) activity.setRunId(threadId, probeRunId);
+      handedOffRunRef.current.add(threadId);
       setResumeNonce((n) => n + 1);
     };
     void Promise.resolve(

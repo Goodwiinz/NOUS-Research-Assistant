@@ -313,3 +313,28 @@ The authenticated checkpoint-owner block rejects a foreign or missing
   `952fc4e05c4d80c0a6a54899bfe4beafc0bba99b70ef22a17095b1bb93fe4bc6`.
   Logs under `/tmp/chat-audit-20260916/`: `task7-root-checkpoint-mutant.log`,
   `task7-root-checkpoint-restored.log`, `task7-root-checkpoint-summary.log`.
+
+### Reload hand-off settle and thread guard (A2 follow-up)
+
+Verified on `fix/chat-reload-handoff-cancelled-run` (base `8dbc58aa1`),
+source `frontend/src/hooks/chat/useChatStreaming.ts`. Focused command
+(from `frontend/`):
+`pnpm exec vitest run src/hooks/__tests__/useChatStreaming.probeInvalidation.test.tsx`.
+
+- Hand-off settle (`if (handedOff) {`, ~line 2788): changed to
+  `if (false && handedOff) {`. The test `a handed-off run that was cancelled
+  on disconnect ends quietly and is reconciled from the server` failed with
+  `expected true to be false` on the "no error bubble" assertion.
+- Clear instead of settle-as-stopped (`clearRun(threadId)`, ~line 2803):
+  replaced with `finishRun(threadId, 'stopped')`. The same test failed with
+  `expected { threadId: 'thread-A', … } to be undefined` (a lingering run
+  record blocks the next activation's probe).
+- Thread guard (`currentThreadId !== threadId`, ~line 2868): line deleted.
+  `does not hand off a live run for a thread that is no longer selected`
+  failed with `expected { threadId: 'thread-A', … } to be undefined`.
+- Scope (`handedOffRunRef.current.delete(threadId)`): forced to `|| true`.
+  `useChatStreaming.resume.test.tsx` > `keeps a failed resume retryable on
+  the next thread activation` failed (a non-hand-off resume must still keep
+  its run `running`).
+- Each mutation was restored from a byte copy and `cmp` confirmed identical
+  source; all 5 probe tests and 5 resume tests passed again afterwards.
