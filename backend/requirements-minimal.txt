@@ -1,18 +1,18 @@
 # Minimal Backend Requirements for Phase 1 Validation
 
 # Core Framework
-fastapi==0.143.3
+fastapi==0.162.2
 starlette>=1.3.1
 uvicorn[standard]==0.54.0
-pydantic==2.14.1
-pydantic-settings==2.16.0
+pydantic==2.14.3
+pydantic-settings==2.16.2
 jsonschema==4.26.0
 beautifulsoup4==4.15.0
 
 # Database
-sqlalchemy==2.1.5
+sqlalchemy==2.1.8
 greenlet>=3.0.0
-alembic==1.20.0
+alembic==1.20.1
 asyncpg==0.32.0
 psycopg2-binary==2.9.13
 pgvector==0.5.1
@@ -21,15 +21,15 @@ pgvector==0.5.1
 python-jose[cryptography]==3.5.0
 cryptography>=50.0.2
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.32
+python-multipart==0.0.33
 PyJWT>=2.13.0  # CVE-2026-48526 (GHSA-xgmm-8j9v-c9wx)
 
 # Background Processing
-celery==5.6.3
+celery==5.7.0
 redis==5.0.1
 
 # Vector Database (using compatible versions with pre-built wheels)
-qdrant-client==1.19.1
+qdrant-client==1.20.0
 numpy<2
 
 # Knowledge Graph
@@ -50,7 +50,7 @@ python-dotenv==1.2.4
 
 # Development
 pytest>=9.2.0
-pytest-asyncio==1.4.0
+pytest-asyncio==1.4.1.post1
 black==26.10.1
 isort==5.12.0
 
@@ -58,9 +58,9 @@ isort==5.12.0
 prometheus-client==0.26.0
 
 # Utilities
-click==8.5.0
+click==8.5.1
 rich==13.7.0
-typer==0.27.3
+typer==0.29.0
 
 # Testing
 pytest-cov==7.1.0
