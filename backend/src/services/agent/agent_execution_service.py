@@ -408,6 +408,90 @@ def _get_latest_user_content(messages: List[Any]) -> Optional[str]:
     return None
 
 
+async def recover_confirm_request_payload(
+    *,
+    job_id: str,
+    thread_id: str,
+    approval_id: str,
+    current_user: User,
+) -> Optional[Dict[str, Any]]:
+    """Rebuild a parked run's request payload from its LangGraph checkpoint.
+
+    For ``/confirm`` when the Redis/L1 job record (the usual payload carrier)
+    is gone inside the 24h awaiting window (R2-H3 follow-up). *thread_id* must
+    come from the caller's tenant-filtered ``agent_runs`` row, never from the
+    client or from *job_id* — the R7-L13 job_id fallback stays dead.
+
+    The checkpoint qualifies only when it is owned by *current_user*, records
+    the same thread, and its pending interrupt hashes to *approval_id*. That
+    receipt binds thread, run (*job_id*), user, checkpoint, interrupt and
+    action, so a mis-mapped or replayed thread can never satisfy it. The resume
+    re-checks all of this against the live checkpoint before dispatch.
+
+    Returns the ``stored_request_payload`` shape, or ``None`` (caller keeps
+    refusing) when anything is missing, mismatched or unreadable.
+    """
+    from src.services.agent.checkpointer import get_checkpointer
+    from src.services.agent.graph import compile_agent_graph
+    from src.services.agent.memory import get_memory_store
+
+    try:
+        checkpointer = await get_checkpointer()
+        store = await get_memory_store()
+        graph = compile_agent_graph(checkpointer=checkpointer, store=store)
+        snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    except Exception:
+        logger.warning(
+            "Confirm payload recovery: checkpoint read failed for %s",
+            job_id,
+            exc_info=True,
+        )
+        return None
+
+    values = getattr(snapshot, "values", None) if snapshot else None
+    if not isinstance(values, dict) or not values:
+        return None
+    if str(values.get("user_id") or "") != str(current_user.id):
+        return None
+    if str(values.get("thread_id") or "") != thread_id:
+        return None
+    try:
+        require_approval(
+            snapshot,
+            approval_id=approval_id,
+            thread_id=thread_id,
+            run_id=job_id,
+            user_id=current_user.id,
+        )
+    except ApprovalExpired:
+        return None
+
+    latest_user_text = _get_latest_user_content(values.get("messages") or [])
+    if not isinstance(latest_user_text, str) or not latest_user_text.strip():
+        return None
+    AgentExecuteRequest = _get_schemas()["AgentExecuteRequest"]
+    try:
+        request = AgentExecuteRequest(
+            messages=[{"role": "user", "content": latest_user_text}],
+            thread_id=thread_id,
+            page_context=values.get("page_context") or {},
+            model=values.get("model") or "",
+            use_rag=values.get("use_rag", True),
+            document_only=bool(values.get("document_only", False)),
+            reasoning_effort=values.get("reasoning_effort"),
+            attachment_ids=values.get("attachment_ids") or None,
+        )
+    except ValueError:
+        logger.warning(
+            "Confirm payload recovery: checkpoint state for %s does not "
+            "validate as a request",
+            job_id,
+            exc_info=True,
+        )
+        return None
+    return stored_request_payload(request)
+
+
 # --- Option B: server-side history rebuild (AGENT_SERVER_SIDE_HISTORY) -------
 #
 # The LangGraph checkpoint (keyed by thread_id) is the model-context source of

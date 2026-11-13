@@ -2,7 +2,9 @@
 
 One Redis list per run (``agent:stream:{stream_id}``) holds JSON
 ``{seq, frame}`` entries; ``agent:stream:active:{thread_id}`` points at the
-currently active run. TTL 3600 matches the job store.
+currently active run. TTL 3600 matches the job store's default 1h record
+TTL, NOT the 24h it keeps ``awaiting_confirmation`` records (audit R2-H3): a
+run parked on a confirmation for over an hour has no replayable buffer left.
 
 ponytail: poll-follow over a plain list; swap to pub/sub if replay latency
 matters.
@@ -19,6 +21,7 @@ from src.services.agent.job_store import get_redis
 
 logger = logging.getLogger(__name__)
 
+# 1h — the job store's default TTL; parked HITL job records outlive it (24h).
 _TTL_SECONDS = 3600
 
 

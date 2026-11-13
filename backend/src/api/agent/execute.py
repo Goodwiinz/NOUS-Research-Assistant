@@ -62,6 +62,7 @@ from src.services.agent.agent_execution_service import (
     _resume_agent_graph,
     _run_agent_graph,
     _set_job,
+    recover_confirm_request_payload,
 )
 from src.services.agent.agent_execution_service import (  # noqa: F401
     stored_request_payload as _stored_request_payload,
@@ -750,6 +751,7 @@ async def confirm_agent_action(
         compare_and_set_status,
     )
     from src.services.agent.job_store import get_job_fresh as _get_job_fresh
+    from src.services.agent.job_store import restore_confirmation_mirror
 
     async def rollback_confirmation_session(context: str) -> None:
         try:
@@ -774,6 +776,7 @@ async def confirm_agent_action(
     # never the payload, so this is the fail-closed signal for the guard.
     job_payload_missing = job is None
     job_from_projection = False
+    projection_thread_id: Optional[str] = None
     if job is not None:
         # Fail closed before consulting another store: a live record owned by
         # someone else must never become a tenancy oracle through fallback.
@@ -800,6 +803,8 @@ async def confirm_agent_action(
             ) from exc
         if run is not None:
             job_from_projection = True
+            if getattr(run, "thread_id", None) is not None:
+                projection_thread_id = str(run.thread_id)
             job = {
                 "status": _normalized_job_status(run.status),
                 "user_id": str(run.user_id),
@@ -809,21 +814,43 @@ async def confirm_agent_action(
             raise HTTPException(status_code=404, detail="Job not found")
     _validate_confirmable_job(job, current_user)
 
-    # R7-L13: fail closed when the Redis job payload is gone. The payload
-    # carries the original request — and with it the thread_id the resume
-    # needs. Without it ``_resume_agent_graph`` used to fall back to
-    # thread_id=job_id, read an empty snapshot, skip the ownership and
-    # interrupt-consumed guards, and fail the run — after this endpoint had
-    # already flipped it awaiting -> running. Refuse BEFORE the claim so the
-    # run stays parked and a client that still holds the turn can retry.
+    # R7-L13: fail closed when the Redis job payload is gone and cannot be
+    # rebuilt. The payload carries the original request — and with it the
+    # thread_id the resume needs. Without it ``_resume_agent_graph`` used to
+    # fall back to thread_id=job_id, read an empty snapshot, skip the
+    # ownership and interrupt-consumed guards, and fail the run — after this
+    # endpoint had already flipped it awaiting -> running. Refuse BEFORE the
+    # claim so the run stays parked and a client that still holds the turn
+    # can retry.
+    #
+    # R2-H3 follow-up: the awaiting window is 24h, so a Redis flush/failover
+    # inside it must not strand the run. Rebuild the payload from durable
+    # state instead — the thread id from this user's tenant-filtered
+    # agent_runs row (never job_id), the rest from the checkpoint, accepted
+    # only when its pending interrupt matches this approval receipt. The
+    # thread re-check, the PostgreSQL claim and every resume guard below
+    # still apply unchanged.
+    recovered_request_payload: Optional[Dict[str, Any]] = None
     if job_payload_missing:
-        logger.warning(
-            "Confirm refused for %s: job payload expired (Redis miss)", job_id
-        )
-        raise HTTPException(
-            status_code=409,
-            detail="This confirmation has expired. Please start the request again.",
-        )
+        if projection_thread_id is not None:
+            recovered_request_payload = await recover_confirm_request_payload(
+                job_id=job_id,
+                thread_id=projection_thread_id,
+                approval_id=request.approval_id,
+                current_user=current_user,
+            )
+        if recovered_request_payload is None:
+            logger.warning(
+                "Confirm refused for %s: job payload expired (Redis miss)", job_id
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This confirmation has expired. Please start the request again."
+                ),
+            )
+        logger.info("Confirm for %s: job payload rebuilt from the checkpoint", job_id)
+        stored_request_payload = recovered_request_payload
 
     if stored_request_payload:
         try:
@@ -891,6 +918,20 @@ async def confirm_agent_action(
             # terminal transition still conflicts.
             result = await compare_and_set_status(
                 job_id, live_status, JobStatus.RUNNING, project=False
+            )
+        if result == "missing" and recovered_request_payload is not None:
+            # The mirror is gone, which is why the payload was rebuilt. Put
+            # the record back (only if still absent) so the resume finds its
+            # request and pollers see the run.
+            result = await restore_confirmation_mirror(
+                job_id,
+                {
+                    "status": JobStatus.RUNNING,
+                    "tool_executions": [],
+                    **_actor_fields(current_user),
+                    "thread_id": projection_thread_id,
+                    "request": recovered_request_payload,
+                },
             )
     except ConfirmationCoordinationUnavailable as exc:
         await release_durable_claim()

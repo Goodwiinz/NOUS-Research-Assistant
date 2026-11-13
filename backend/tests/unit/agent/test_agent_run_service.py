@@ -886,6 +886,58 @@ async def test_list_stale_runs_selects_sweepable_candidates(session_factory):
         assert await svc.list_stale_runs(db, updated_before=past_cutoff) == []
 
 
+async def test_list_stale_runs_excludes_in_window_awaiting_rows(session_factory):
+    """Parked confirmation prompts inside their awaiting window are not stale:
+    more of them than ``limit`` must not hide a stuck running run (R2-H3
+    follow-up). They qualify again once older than the awaiting cutoff.
+
+    Mutation check: drop the ``awaiting_updated_before`` clause in
+    ``list_stale_runs`` and the limit-sized batch is all awaiting rows.
+    """
+    now = datetime.now(timezone.utc)
+    parked_at = now - timedelta(hours=3)
+    async with session_factory() as db:
+        for _ in range(5):
+            db.add(
+                AgentRun(
+                    job_id=_job_id(),
+                    user_id=USER_A,
+                    status=JobStatus.AWAITING_CONFIRMATION.value,
+                    created_at=parked_at,
+                    updated_at=parked_at,
+                )
+            )
+        stuck = _job_id()
+        db.add(
+            AgentRun(
+                job_id=stuck,
+                user_id=USER_A,
+                status=JobStatus.RUNNING.value,
+                created_at=now - timedelta(hours=1),
+                updated_at=now - timedelta(hours=1),
+            )
+        )
+        await db.commit()
+
+        cutoff = now - timedelta(minutes=30)
+        found = await svc.list_stale_runs(
+            db,
+            updated_before=cutoff,
+            awaiting_updated_before=now - timedelta(hours=25),
+            limit=3,
+        )
+        assert [r.job_id for r in found] == [stuck]
+
+        # Past the awaiting cutoff the parked rows are candidates again.
+        expired = await svc.list_stale_runs(
+            db,
+            updated_before=cutoff,
+            awaiting_updated_before=now - timedelta(hours=2),
+            limit=10,
+        )
+        assert len(expired) == 6
+
+
 # ---------------------------------------------------------------------------
 # record_job_status — the write-through entry point
 # ---------------------------------------------------------------------------

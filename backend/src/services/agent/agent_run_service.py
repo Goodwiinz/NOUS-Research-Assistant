@@ -1030,6 +1030,7 @@ async def list_stale_runs(
     db: AsyncSession,
     *,
     updated_before: datetime,
+    awaiting_updated_before: Optional[datetime] = None,
     limit: int = 50,
     now: Optional[datetime] = None,
 ) -> list[AgentRun]:
@@ -1043,16 +1044,33 @@ async def list_stale_runs(
     child Codex run with no time limit (Stop cancels the child; the resume
     drain moves them on), and listing them would let long-waiting parents
     fill the oldest-first batch and starve the sweeper of real stale runs.
+
+    ``awaiting_confirmation`` rows get the same treatment while they are
+    still confirmable: when *awaiting_updated_before* is given they qualify
+    only once ``updated_at`` is older than it (the sweeper passes its
+    ``AGENT_RUN_STALE_AWAITING_AFTER_SECONDS`` cutoff). Without that, more
+    than *limit* fresh prompts would fill the batch, every one would be
+    skipped, and newer stuck running runs would never be reached (R2-H3
+    follow-up).
     """
     now = now or _utcnow()
     non_terminal = [
         s.value for s in JobStatus if not s.is_terminal and s is not JobStatus.DELEGATED
     ]
+    staleness = AgentRun.updated_at < updated_before
+    if awaiting_updated_before is not None:
+        staleness = and_(
+            staleness,
+            or_(
+                AgentRun.status != JobStatus.AWAITING_CONFIRMATION.value,
+                AgentRun.updated_at < awaiting_updated_before,
+            ),
+        )
     stmt = (
         select(AgentRun)
         .where(
             AgentRun.status.in_(non_terminal),
-            AgentRun.updated_at < updated_before,
+            staleness,
             or_(
                 AgentRun.lease_owner.is_(None),
                 AgentRun.lease_expires_at.is_(None),

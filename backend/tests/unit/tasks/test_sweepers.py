@@ -451,6 +451,40 @@ async def test_waiting_handoff_parents_do_not_starve_the_sweeper(session_factory
 
 
 @pytest.mark.asyncio
+async def test_fresh_confirmation_prompts_do_not_starve_the_sweeper(session_factory):
+    """Awaiting-confirmation rows inside their 25h window are parked, not
+    stale, so they must not fill the sweeper's oldest-first batch of 100 and
+    hide a newer stuck running run behind them (R2-H3 follow-up).
+
+    Mutation check: drop the ``awaiting_updated_before`` clause in
+    ``agent_run_service.list_stale_runs`` and the batch is all parked prompts
+    (each skipped by the sweeper backstop), so the running run is never
+    reached and stays ``running``.
+    """
+    async with session_factory() as db:
+        for _ in range(101):  # more than the sweeper's batch limit of 100
+            db.add(
+                AgentRun(
+                    job_id=str(uuid.uuid4()),
+                    user_id=uuid.uuid4(),
+                    status="awaiting_confirmation",
+                    created_at=VERY_STALE,
+                    updated_at=VERY_STALE,  # 3h old: still confirmable
+                )
+            )
+        await db.commit()
+    # Stale, but newer than every parked prompt: last in oldest-first order.
+    stale_id = await _seed(session_factory, status="running", updated_at=STALE)
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, stale_id))[0] == "failed"
+    assert result["scanned"] == 1
+    assert result["failed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_live_store_terminal_repairs_instead_of_failing(session_factory):
     """Projection missed the terminal write (fire-and-forget lost): the run
     actually completed — repair the projection, don't fail a finished run."""
