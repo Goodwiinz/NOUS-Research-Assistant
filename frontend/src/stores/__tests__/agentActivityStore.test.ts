@@ -6,7 +6,9 @@ describe('agentActivityStore', () => {
     useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
   });
 
-  const getRun = (threadId: string) =>
+  const getRun = (
+    threadId: string
+  ): ReturnType<typeof useAgentActivityStore.getState>['runs'][string] =>
     useAgentActivityStore.getState().runs[threadId];
 
   it('startRun initializes a running run with empty steps and plan', () => {
@@ -380,5 +382,24 @@ describe('agentActivityStore — no-op updates do not notify subscribers', () =>
     pushToolStart('t1', 'arxiv_search'); // de-duped, no-op
     unsub();
     expect(calls).toBe(0);
+  });
+
+  it('clearRun forgets only that thread and releases the current pointer', () => {
+    const { startRun, clearRun } = useAgentActivityStore.getState();
+    startRun('t1', 'Agent', 'a');
+    startRun('t2', 'Agent', 'b');
+    clearRun('t2');
+    const { runs } = useAgentActivityStore.getState();
+    expect(runs['t2']).toBeUndefined();
+    expect(runs['t1']?.state).toBe('running');
+    expect(useAgentActivityStore.getState().currentThreadId).toBeNull();
+  });
+
+  it('clearRun on an unknown thread is a no-op', () => {
+    const calls: number[] = [];
+    const unsub = useAgentActivityStore.subscribe(() => calls.push(1));
+    useAgentActivityStore.getState().clearRun('missing');
+    unsub();
+    expect(calls).toHaveLength(0);
   });
 });

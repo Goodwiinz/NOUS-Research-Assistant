@@ -8,7 +8,7 @@
  * store is empty, so the live run must be handed to the resume effect, which
  * reattaches from cursor 0. Otherwise the chat never shows the run again.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
@@ -218,6 +218,15 @@ describe('useChatStreaming cold-load probe invalidation', () => {
       }
     );
 
+    // thread-B already settled a run this session, so selecting it opens no
+    // probe of its own — and therefore does NOT abort thread-A's probe. The
+    // only thing standing between thread-A's late frame and a seeded run is
+    // the hand-off's `currentThreadId !== threadId` guard. (Previously this
+    // test let thread-B's probe abort thread-A's, so it passed with the
+    // guard deleted.)
+    useAgentActivityStore.getState().startRun('thread-B', 'Agent', 'settled');
+    useAgentActivityStore.getState().finishRun('thread-B', 'done');
+
     const params = makeParams();
     renderHook(
       () =>
@@ -227,13 +236,16 @@ describe('useChatStreaming cold-load probe invalidation', () => {
       { wrapper }
     );
     await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
+    const probeSignal = resumeStreamMock.mock.calls[0][3] as AbortSignal;
 
     // The user moves to another thread before thread-A's first frame lands.
     act(() => {
       useChatStore.setState({ currentThreadId: 'thread-B' });
     });
-    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(2));
-    expect(resumeStreamMock.mock.calls[1][0]).toBe('thread-B');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Precondition for exercising the guard: thread-A's probe is still open.
+    expect(probeSignal.aborted).toBe(false);
+    expect(resumeStreamMock).toHaveBeenCalledTimes(1);
 
     act(() => {
       probeCallbacks.onToken?.('late token for thread-A');
@@ -241,6 +253,110 @@ describe('useChatStreaming cold-load probe invalidation', () => {
 
     expect(useAgentActivityStore.getState().runs['thread-A']).toBeUndefined();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(resumeStreamMock).toHaveBeenCalledTimes(2);
+    expect(resumeStreamMock).toHaveBeenCalledTimes(1);
   });
+
+  it('a handed-off run that was cancelled on disconnect ends quietly and is reconciled from the server (A2 follow-up)', async () => {
+    // Reload race: the probe lands before the disconnect cancel clears the
+    // active-run pointer, so it hands the run off. The cancel path writes no
+    // terminal frame, so every resume attempt ends `failed`.
+    // refreshMessages is the store's existing reconcile path; it is an action,
+    // so restore the real one afterwards (reset() only resets data).
+    const realRefreshMessages = useChatStore.getState().refreshMessages;
+    const refreshMessages = vi.fn().mockResolvedValue(true);
+    useChatStore.setState({ refreshMessages });
+    onTestFinished(() =>
+      useChatStore.setState({ refreshMessages: realRefreshMessages })
+    );
+    const probeKeys = [
+      'onConfirmation',
+      'onRunId',
+      'onToken',
+      'onToolStart',
+      'onStatus',
+      'onPlan',
+    ];
+    resumeStreamMock.mockImplementation(
+      async (_threadId: string, _afterSeq: number, cb: ProbeCallbacks) => {
+        const call = resumeStreamMock.mock.calls.length;
+        if (call === 1) {
+          cb.onToken?.('partial answer');
+          return new Promise(() => {});
+        }
+        if (call === 2) cb.onToken?.('partial answer');
+        if (Object.keys(cb).join() === probeKeys.join()) {
+          return { status: 'idle' };
+        }
+        return { status: 'failed', error: 'Stream ended unexpectedly' };
+      }
+    );
+
+    const params = makeParams();
+    renderHook(
+      () =>
+        useChatStreaming(
+          params as unknown as Parameters<typeof useChatStreaming>[0]
+        ),
+      { wrapper }
+    );
+
+    // Probe + three resume attempts.
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(4), {
+      timeout: 10_000,
+    });
+    // The thread is reconciled from the persisted rows (the stopped partial).
+    await waitFor(() =>
+      expect(refreshMessages.mock.calls.map(([t]) => t)).toContain('thread-A')
+    );
+
+    // No "Something went wrong" bubble for a run the user never saw fail.
+    const setMessages = params.setMessages as ReturnType<typeof vi.fn>;
+    const renderedError = setMessages.mock.calls.some(
+      ([next]) =>
+        Array.isArray(next) &&
+        (next as ChatPageMessage[]).some((m) => m.error !== undefined)
+    );
+    expect(renderedError).toBe(false);
+    // The persisted row's id is unknown (no done frame), so the reconcile
+    // must not expect the synthetic resume runtime id: that expectation can
+    // never match and would leave the thread stale beside the placeholder.
+    const threadARefreshes = refreshMessages.mock.calls.filter(
+      ([t]) => t === 'thread-A'
+    );
+    expect(threadARefreshes.length).toBeGreaterThan(0);
+    for (const [, expected] of threadARefreshes) {
+      expect(
+        (expected as { runtimeId?: string } | undefined)?.runtimeId
+      ).toBeUndefined();
+    }
+    // The streaming placeholder is dropped, not left beside the server row.
+    // setMessages takes arrays or updaters; replay them to get the result.
+    const rendered = setMessages.mock.calls.reduce<ChatPageMessage[]>(
+      (prev, [next]) =>
+        typeof next === 'function'
+          ? (next as (p: ChatPageMessage[]) => ChatPageMessage[])(prev)
+          : (next as ChatPageMessage[]),
+      []
+    );
+    expect(rendered.some((m) => m.isStreaming === true)).toBe(false);
+    expect(
+      rendered.some(
+        (m) => m.source === 'optimistic' && m.isStreaming === true
+      )
+    ).toBe(false);
+    // The seeded run is settled, not left 'running' forever.
+    expect(useAgentActivityStore.getState().runs['thread-A']).toBeUndefined();
+
+    // Nothing is left to block the next activation's probe.
+    act(() => useChatStore.setState({ currentThreadId: 'thread-B' }));
+    act(() => useChatStore.setState({ currentThreadId: 'thread-A' }));
+    await waitFor(() => {
+      const threadAProbes = resumeStreamMock.mock.calls.filter(
+        ([threadId, , cb]) =>
+          threadId === 'thread-A' &&
+          Object.keys(cb as object).join() === probeKeys.join()
+      );
+      expect(threadAProbes).toHaveLength(2);
+    });
+  }, 20_000);
 });
