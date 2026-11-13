@@ -12,6 +12,12 @@ on:
       - ".github/actions/**"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Superseded PR pushes are cancelled; protected-branch pushes are not, so
+  # every pushed commit range is still scanned.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -19,6 +25,7 @@ jobs:
   actionlint:
     name: Validate GitHub Actions Workflows
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,7 +43,7 @@ jobs:
         if: steps.cache-actionlint.outputs.cache-hit != 'true'
         run: |
           ACTIONLINT_VERSION="1.7.7"
-          curl -sL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" | tar xz -C /usr/local/bin actionlint
+          curl -sSfL --retry 3 --retry-delay 5 --retry-all-errors "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" | tar xz -C /usr/local/bin actionlint
 
       - name: Run actionlint
         env:

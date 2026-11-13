@@ -42,6 +42,7 @@ jobs:
   ci-plan:
     name: CI Plan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       profile: ${{ steps.select.outputs.profile }}
       backend: ${{ steps.select.outputs.backend }}
@@ -73,6 +74,7 @@ jobs:
   lightweight-checks:
     name: Lightweight Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: ci-plan
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,6 +124,7 @@ jobs:
   lint-backend:
     name: Lint Backend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
@@ -221,6 +224,7 @@ jobs:
   lint-frontend:
     name: Lint Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: ci-plan
     if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
@@ -307,6 +311,7 @@ jobs:
   migration-check:
     name: Alembic Migration Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
@@ -436,6 +441,7 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
@@ -445,8 +451,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
           df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -525,6 +541,7 @@ jobs:
   golden-replay:
     name: Golden Replay
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
@@ -534,7 +551,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
+          df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -588,6 +616,7 @@ jobs:
   openapi-contract:
     name: OpenAPI Contract Ratchet
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
@@ -601,7 +630,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
+          df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -745,6 +785,7 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [ci-plan, lint-backend]
     if: needs.ci-plan.outputs.backend == 'true'
     steps:
@@ -771,6 +812,7 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [ci-plan, lint-frontend]
     if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
@@ -841,14 +883,16 @@ jobs:
     name: Integration Tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [ci-plan, unit-tests, frontend-tests]
-    # Explicit status function avoids GitHub's implicit success() skipping this
-    # job when an unselected frontend dependency is intentionally skipped.
+    # Gate on Lint Backend only. Waiting for Unit Tests (12-15 min) and
+    # Frontend Tests queued the shards behind ~15 min of serial wait although
+    # the suites share no artifacts (run 43134323702: shards started at
+    # +16.6 min, E2E at +33 min, Release Gate at +43 min). Release Gate
+    # still requires every selected job, so nothing is skipped.
+    needs: [ci-plan, lint-backend]
     if: >-
       !cancelled() && needs.ci-plan.result == 'success' &&
       needs.ci-plan.outputs.integration == 'true' &&
-      needs.unit-tests.result == 'success' &&
-      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
+      needs.lint-backend.result == 'success'
     strategy:
       # One red shard must not hide the others' results.
       fail-fast: false
@@ -881,8 +925,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
           df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -1014,7 +1068,10 @@ jobs:
           path: test-results/ingestion-recovery.xml
           retention-days: 7
       - name: Run two-account PostgreSQL search isolation tests
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        # Shard 3 is the shortest leg (6.3 min vs 7.6-7.7 min of sharded tests
+        # in run 43134323702); this 2.4 min lane rides it so shard 1, which
+        # also carries the ingestion recovery lane, stops being the longest.
+        if: ${{ !cancelled() && matrix.shard == 3 }}
         # Matrix row S2 (GOO-399). The sharded run above has no
         # TWO_ACCOUNT_PG_TEST_DATABASE_URL, so this suite skips there. Run it
         # once against the job's postgres service and reject a green run in
@@ -1055,7 +1112,7 @@ jobs:
           TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
       - name: Save two-account PostgreSQL search results
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        if: ${{ !cancelled() && matrix.shard == 3 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: two-account-pg-search-results
@@ -1094,8 +1151,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
           df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -1176,8 +1243,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
           df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -1564,8 +1641,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Free runner disk space
+        # ubuntu-latest now starts with ~86 GB free (145G disk, 59G used in
+        # run 43134323702) and this cleanup reclaimed ~20 GB in 1.5-2.4 min
+        # per job. No job here needs that. Keep it as a safety net that only
+        # runs if the hosted image shrinks below the threshold.
         run: |
           df -h
+          min_free_gb=40
+          avail_gb=$(df -BG --output=avail / | tail -n 1 | tr -dc '0-9')
+          if [ "${avail_gb:-0}" -ge "$min_free_gb" ]; then
+            echo "${avail_gb}G free (>= ${min_free_gb}G); skipping cleanup"
+            exit 0
+          fi
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
@@ -1606,6 +1693,7 @@ jobs:
   test-summary:
     name: Release Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs:
       - ci-plan
       - lightweight-checks
