@@ -13,7 +13,7 @@
 # =============================================================================
 # Stage 1: Base Image Builder
 # =============================================================================
-FROM python:3.14-slim as base
+FROM python:3.15-slim as base
 
 # Set environment variables for better pip performance and security
 ENV PIP_NO_CACHE_DIR=1 \
