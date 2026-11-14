@@ -101,8 +101,14 @@ class _FakeResolver:
 
     async def resolve(self, host: str, port: int = 0, family: int = 0) -> list[dict]:
         return [
-            {"hostname": host, "host": h, "port": port, "family": family,
-             "proto": 0, "flags": 0}
+            {
+                "hostname": host,
+                "host": h,
+                "port": port,
+                "family": family,
+                "proto": 0,
+                "flags": 0,
+            }
             for h in self.hosts
         ]
 
@@ -114,7 +120,9 @@ class _FakeResolver:
 @pytest.mark.parametrize(
     "hosts", [["127.0.0.1"], ["93.184.216.34", "10.0.0.5"], ["169.254.169.254"], []]
 )
-async def test_public_only_resolver_refuses_non_public_answers(hosts: list[str]) -> None:
+async def test_public_only_resolver_refuses_non_public_answers(
+    hosts: list[str],
+) -> None:
     from src.utils.outbound_url_guard import PublicOnlyResolver, UnsafeDestinationError
 
     resolver = PublicOnlyResolver(_FakeResolver(hosts))  # type: ignore[arg-type]
