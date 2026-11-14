@@ -78,7 +78,7 @@ revision:
 ```bash
 export NOUS_COORD_MODE=remote-required
 export NOUS_COORD_GIT_REMOTE=origin
-export NOUS_GITHUB_REPOSITORY=Goodwiinz/rag
+export NOUS_GITHUB_REPOSITORY=goodwiins/NOUS-Research-Assistant
 export NOUS_COORD_BRANCH=nous-coordination
 export NOUS_MACHINE_ID=<stable-machine-id>
 export LOOP_BRIDGE_DIR=<machine-local-mutex-dir>

@@ -18,7 +18,7 @@
 #   scripts/ci/migrate-develop-protection-to-ruleset.sh <app id> [--apply]
 set -euo pipefail
 
-REPO="${REPO:-Goodwiinz/rag}"
+REPO="${REPO:-goodwiins/NOUS-Research-Assistant}"
 BRANCH="develop"
 RULESET_NAME="develop required checks"
 

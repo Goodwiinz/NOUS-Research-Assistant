@@ -12,7 +12,7 @@ terminal that has `kubectl` pointed at `do-nyc3-rag-system-cluster`.
 
 ## 1. Confirm code rolled to dev
 
-- https://github.com/Goodwiinz/rag/actions/workflows/docker-build.yml — wait
+- https://github.com/goodwiins/NOUS-Research-Assistant/actions/workflows/docker-build.yml — wait
   until the `develop` build triggered by PR #466 is green.
 - ArgoCD app `nous-dev` should be **Synced** + **Healthy**.
 
