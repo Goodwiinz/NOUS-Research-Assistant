@@ -26,7 +26,7 @@ def test_runtime_config_requires_explicit_machine_and_uses_planned_defaults(tmp_
     assert config.coord_mode == "local"
     assert config.git_remote == "origin"
     assert config.coordination_branch == "nous-coordination"
-    assert config.github_repository == "Goodwiinz/rag"
+    assert config.github_repository == "goodwiins/NOUS-Research-Assistant"
 
     with pytest.raises(ValidationError):
         load_runtime_config({}, repo_root=tmp_path / "rag")

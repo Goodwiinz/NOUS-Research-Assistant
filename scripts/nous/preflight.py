@@ -43,7 +43,7 @@ def load_runtime_config(
     remote = environ.get("NOUS_COORD_GIT_REMOTE", "origin")
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", remote) is None:
         raise _validation("NOUS_COORD_GIT_REMOTE is invalid")
-    repository = environ.get("NOUS_GITHUB_REPOSITORY", "Goodwiinz/rag")
+    repository = environ.get("NOUS_GITHUB_REPOSITORY", "goodwiins/NOUS-Research-Assistant")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise _validation("NOUS_GITHUB_REPOSITORY must be owner/repo")
     bridge_value = environ.get("LOOP_BRIDGE_DIR")
