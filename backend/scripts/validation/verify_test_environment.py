@@ -4,23 +4,25 @@ Test Environment Verification Script
 Checks if all required services and dependencies are available for testing
 """
 
-import os
-import sys
 import asyncio
-import subprocess
 import importlib
-from typing import Dict, List, Tuple, Optional
+import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 
 # Color codes for output
 class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    BOLD = "\033[1m"
+    END = "\033[0m"
+
 
 @dataclass
 class ServiceCheck:
@@ -28,6 +30,7 @@ class ServiceCheck:
     status: bool
     message: str
     required: bool = True
+
 
 class TestEnvironmentVerifier:
     """Verifies test environment setup"""
@@ -60,24 +63,35 @@ class TestEnvironmentVerifier:
             "crewai": "Multi-agent framework",
             "deepeval": "RAG evaluation",
             "neo4j": "Graph database driver",
-            "qdrant-client": "Vector database client",
             "redis": "Cache driver",
             "factory_boy": "Test factories",
-            "faker": "Fake data generator"
+            "faker": "Fake data generator",
         }
 
         for package, description in required_packages.items():
             try:
                 importlib.import_module(package)
                 self.checks.append(
-                    ServiceCheck(package, True, f"{description} - {Colors.GREEN}✓ Installed{Colors.END}")
+                    ServiceCheck(
+                        package,
+                        True,
+                        f"{description} - {Colors.GREEN}✓ Installed{Colors.END}",
+                    )
                 )
                 print(f"  {Colors.GREEN}✓{Colors.END} {package} - {description}")
             except ImportError:
-                status = "Required" if package in ["pytest", "fastapi", "crewai"] else "Optional"
+                status = (
+                    "Required"
+                    if package in ["pytest", "fastapi", "crewai"]
+                    else "Optional"
+                )
                 color = Colors.RED if status == "Required" else Colors.YELLOW
                 self.checks.append(
-                    ServiceCheck(package, False, f"{description} - {color}✗ Not installed{Colors.END}")
+                    ServiceCheck(
+                        package,
+                        False,
+                        f"{description} - {color}✗ Not installed{Colors.END}",
+                    )
                 )
                 print(f"  {color}✗{Colors.END} {package} - {description} ({status})")
 
@@ -90,9 +104,8 @@ class TestEnvironmentVerifier:
             "DATABASE_URL",
             "REDIS_URL",
             "NEO4J_URI",
-            "QDRANT_URL",
             "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY"
+            "ANTHROPIC_API_KEY",
         ]
 
         for var in required_vars:
@@ -100,14 +113,10 @@ class TestEnvironmentVerifier:
             if value:
                 # Hide sensitive values
                 display_value = value if "KEY" not in var else "***"
-                self.checks.append(
-                    ServiceCheck(var, True, f"Set to: {display_value}")
-                )
+                self.checks.append(ServiceCheck(var, True, f"Set to: {display_value}"))
                 print(f"  {Colors.GREEN}✓{Colors.END} {var} = {display_value}")
             else:
-                self.checks.append(
-                    ServiceCheck(var, False, "Not set")
-                )
+                self.checks.append(ServiceCheck(var, False, "Not set"))
                 print(f"  {Colors.YELLOW}⚠{Colors.END} {var} = Not set")
 
     async def check_database_connections(self) -> None:
@@ -130,7 +139,9 @@ class TestEnvironmentVerifier:
             self.checks.append(
                 ServiceCheck("PostgreSQL", False, f"Connection failed: {str(e)}")
             )
-            print(f"  {Colors.RED}✗{Colors.END} PostgreSQL - Connection failed: {str(e)}")
+            print(
+                f"  {Colors.RED}✗{Colors.END} PostgreSQL - Connection failed: {str(e)}"
+            )
 
         # Check Redis
         try:
@@ -139,9 +150,7 @@ class TestEnvironmentVerifier:
 
             r = redis.Redis.from_url(TEST_REDIS["url"])
             r.ping()
-            self.checks.append(
-                ServiceCheck("Redis", True, "Connection successful")
-            )
+            self.checks.append(ServiceCheck("Redis", True, "Connection successful"))
             print(f"  {Colors.GREEN}✓{Colors.END} Redis - Connection successful")
         except Exception as e:
             self.checks.append(
@@ -155,37 +164,17 @@ class TestEnvironmentVerifier:
             from test_config import TEST_NEO4J
 
             driver = GraphDatabase.driver(
-                TEST_NEO4J["uri"],
-                auth=(TEST_NEO4J["user"], TEST_NEO4J["password"])
+                TEST_NEO4J["uri"], auth=(TEST_NEO4J["user"], TEST_NEO4J["password"])
             )
             driver.verify_connectivity()
             driver.close()
-            self.checks.append(
-                ServiceCheck("Neo4j", True, "Connection successful")
-            )
+            self.checks.append(ServiceCheck("Neo4j", True, "Connection successful"))
             print(f"  {Colors.GREEN}✓{Colors.END} Neo4j - Connection successful")
         except Exception as e:
             self.checks.append(
                 ServiceCheck("Neo4j", False, f"Connection failed: {str(e)}")
             )
             print(f"  {Colors.RED}✗{Colors.END} Neo4j - Connection failed: {str(e)}")
-
-        # Check Qdrant
-        try:
-            from qdrant_client import QdrantClient
-            from test_config import TEST_QDRANT
-
-            client = QdrantClient(url=TEST_QDRANT["url"])
-            client.get_collections()
-            self.checks.append(
-                ServiceCheck("Qdrant", True, "Connection successful")
-            )
-            print(f"  {Colors.GREEN}✓{Colors.END} Qdrant - Connection successful")
-        except Exception as e:
-            self.checks.append(
-                ServiceCheck("Qdrant", False, f"Connection failed: {str(e)}")
-            )
-            print(f"  {Colors.RED}✗{Colors.END} Qdrant - Connection failed: {str(e)}")
 
     def check_docker_services(self) -> None:
         """Check if Docker services are running"""
@@ -195,18 +184,17 @@ class TestEnvironmentVerifier:
             result = subprocess.run(
                 ["docker", "ps", "--format", "table {{.Names}}\t{{.Status}}"],
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if result.returncode == 0:
-                lines = result.stdout.split('\n')[1:]  # Skip header
-                services = [line.split('\t')[0] for line in lines if line]
+                lines = result.stdout.split("\n")[1:]  # Skip header
+                services = [line.split("\t")[0] for line in lines if line]
 
                 expected_services = [
                     "neo4j",
-                    "rag_system-qdrant-1",
                     "rag_system-postgres-1",
-                    "rag_system-redis-commander-1"
+                    "rag_system-redis-commander-1",
                 ]
 
                 for service in expected_services:
@@ -240,7 +228,7 @@ class TestEnvironmentVerifier:
             ("test_config.py", "Test configuration file"),
             ("conftest.py", "Pytest configuration file"),
             ("requirements.txt", "Dependencies file"),
-            ("requirements-test.txt", "Test dependencies file")
+            ("requirements-test.txt", "Test dependencies file"),
         ]
 
         for item, description in required_items:
@@ -252,9 +240,7 @@ class TestEnvironmentVerifier:
                 )
                 print(f"  {Colors.GREEN}✓{Colors.END} {item} - {description}")
             else:
-                self.checks.append(
-                    ServiceCheck(f"File: {item}", False, f"Missing")
-                )
+                self.checks.append(ServiceCheck(f"File: {item}", False, f"Missing"))
                 print(f"  {Colors.RED}✗{Colors.END} {item} - {description} (Missing)")
 
     def check_test_files(self) -> None:
@@ -265,18 +251,21 @@ class TestEnvironmentVerifier:
             ("tests/unit", "Unit tests"),
             ("tests/integration", "Integration tests"),
             ("tests/specs", "Specification tests"),
-            ("tests/test_*.py", "General tests")
+            ("tests/test_*.py", "General tests"),
         ]
 
         for pattern, description in test_patterns:
             import glob
+
             files = glob.glob(os.path.join(os.getcwd(), pattern))
             if files:
                 count = len(files) if os.path.isdir(files[0]) else 1
                 self.checks.append(
                     ServiceCheck(f"Tests: {description}", True, f"{count} files found")
                 )
-                print(f"  {Colors.GREEN}✓{Colors.END} {description} - {count} files found")
+                print(
+                    f"  {Colors.GREEN}✓{Colors.END} {description} - {count} files found"
+                )
             else:
                 self.checks.append(
                     ServiceCheck(f"Tests: {description}", False, "No files found")
@@ -291,7 +280,9 @@ class TestEnvironmentVerifier:
         total_checks = len(self.checks)
         passed = sum(1 for check in self.checks if check.status)
         failed = total_checks - passed
-        critical = sum(1 for check in self.checks if not check.status and check.required)
+        critical = sum(
+            1 for check in self.checks if not check.status and check.required
+        )
 
         print(f"\n{Colors.BOLD}{'='*60}")
         print(f"VERIFICATION SUMMARY")
@@ -319,7 +310,9 @@ class TestEnvironmentVerifier:
 
         # Next steps
         print(f"\n{Colors.BLUE}NEXT STEPS:{Colors.END}")
-        print(f"  1. Install missing dependencies: pip install -r requirements-test.txt")
+        print(
+            f"  1. Install missing dependencies: pip install -r requirements-test.txt"
+        )
         print(f"  2. Start required services: docker-compose up -d")
         print(f"  3. Run tests: pytest")
         print(f"  4. Run specific test suites:")
@@ -347,8 +340,7 @@ async def main():
 
     # Exit with appropriate code
     critical_failures = sum(
-        1 for check in verifier.checks
-        if not check.status and check.required
+        1 for check in verifier.checks if not check.status and check.required
     )
 
     if critical_failures > 0:

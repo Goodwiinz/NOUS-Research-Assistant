@@ -1356,11 +1356,11 @@ jobs:
       - name: Start infrastructure services
         run: |
           # Start infrastructure services (not backend/frontend, they start separately)
-          docker compose -p rag_system -f docker-compose.ci.yml up -d postgres redis neo4j qdrant gotrue auth-proxy
+          docker compose -p rag_system -f docker-compose.ci.yml up -d postgres redis neo4j gotrue auth-proxy
 
           # Wait for services with working healthchecks to become healthy
-          # Note: qdrant and gotrue use distroless images, so their healthchecks
-          # fail. We gate on postgres, redis, neo4j (3 healthy) then poll the rest.
+          # Note: gotrue uses a distroless image, so its healthcheck
+          # fails. We gate on postgres, redis, neo4j (3 healthy) then poll the rest.
           echo "Waiting for core services with healthchecks..."
           SECONDS=0
           healthy_count() {
@@ -1382,7 +1382,7 @@ jobs:
           echo "Core services healthy (${SECONDS}s)"
 
           # Poll distroless services from host (they have no shell inside)
-          for probe in "qdrant=http://localhost:6333/healthz" "gotrue=http://localhost:9999/health" "auth-proxy=http://localhost:8999/health"; do
+          for probe in "gotrue=http://localhost:9999/health" "auth-proxy=http://localhost:8999/health"; do
             name="${probe%%=*}"; url="${probe#*=}"
             echo "Waiting for ${name} at ${url} ..."
             t=0
@@ -1410,7 +1410,6 @@ jobs:
             -e NEO4J_USERNAME=neo4j \
             -e NEO4J_PASSWORD= \
             -e NEO4J_AUTH_DISABLED=true \
-            -e QDRANT_URL=http://qdrant:6333 \
             -e ENVIRONMENT=testing \
             -e SECRET_KEY=ci-test-secret-key-32-characters! \
             -e JWT_SECRET_KEY=ci-test-jwt-secret-key-32chars! \
