@@ -64,12 +64,23 @@ def _raise_if_all_sources_failed(source_results: Dict[Any, Any]) -> None:
     re-raise it past their full-text fallback, so a saturated pool gets no
     extra work). Every source failed otherwise → RuntimeError, which the
     callers' handlers turn into the full-text fallback.
+
+    Only sources that can put a document on the page count. Fusion drops
+    documents found only by the knowledge-graph arm (it boosts, never adds),
+    and that arm reports success with Neo4j down, so its "success" next to a
+    failed full-text arm would still yield an empty NO_MATCH page.
     """
-    if not source_results or any(r.success for r in source_results.values()):
+    if not source_results:
+        return
+    content_results = [
+        r for st, r in source_results.items() if st not in _BOOST_ONLY_SOURCES
+    ]
+    # A request routed only to boost-only sources keeps the old rule.
+    considered = content_results or list(source_results.values())
+    if any(r.success for r in considered):
         return
     if any(
-        r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT)
-        for r in source_results.values()
+        r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT) for r in considered
     ):
         raise HybridSearchUnavailableError(
             "hybrid search sources exhausted capacity or deadline"
@@ -83,6 +94,11 @@ class SearchSourceType(Enum):
     FULLTEXT = "fulltext"
     VECTOR = "vector"
     KNOWLEDGE_GRAPH = "knowledge_graph"
+
+
+# Sources whose hits only boost documents another source already returned
+# (see _fuse_search_results); they cannot put a document on the page alone.
+_BOOST_ONLY_SOURCES = frozenset({SearchSourceType.KNOWLEDGE_GRAPH})
 
 
 @dataclass

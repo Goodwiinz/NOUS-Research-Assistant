@@ -298,3 +298,94 @@ def test_diagnostics_search_raises_unavailable_when_saturated(
         svc.search_with_diagnostics(
             search_request=_request(), user_id="user-1", organization_id=ORG_ID
         )
+
+
+def _failed(source: SearchSourceType, error: str) -> SearchSourceResult:
+    return SearchSourceResult(
+        source_type=source,
+        results=[],
+        search_time_ms=0,
+        total_available=0,
+        success=False,
+        error=error,
+    )
+
+
+def test_graph_success_does_not_mask_a_failed_fulltext_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The graph arm reports success even with Neo4j down (its reads return
+    []), and fusion drops graph-only documents. A failed full-text arm beside
+    it used to pass the "any source succeeded" check and return an empty 200
+    that reads as NO_MATCH. It must take the full-text fallback instead."""
+    svc = HybridSearchService()
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {
+            SearchSourceType.FULLTEXT: _failed(SearchSourceType.FULLTEXT, "db error"),
+            SearchSourceType.KNOWLEDGE_GRAPH: _ok(SearchSourceType.KNOWLEDGE_GRAPH),
+        },
+    )
+    sentinel = object()
+    calls: list[Any] = []
+
+    def _fallback(*args: Any, **_k: Any) -> Any:
+        calls.append(args)
+        return sentinel
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _fallback)
+
+    assert svc.search(_request(), "user-1", ORG_ID) is sentinel
+    assert len(calls) == 1
+
+
+def test_graph_success_does_not_mask_a_timed_out_fulltext_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.search.hybrid_search_service import HybridSearchUnavailableError
+
+    svc = HybridSearchService()
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {
+            SearchSourceType.FULLTEXT: _failed(
+                SearchSourceType.FULLTEXT, "search timed out"
+            ),
+            SearchSourceType.KNOWLEDGE_GRAPH: _ok(SearchSourceType.KNOWLEDGE_GRAPH),
+        },
+    )
+
+    def _no_fallback(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("fallback must not run when the deadline was spent")
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _no_fallback)
+
+    with pytest.raises(HybridSearchUnavailableError):
+        svc.search(_request(), "user-1", ORG_ID)
+
+
+def test_successful_fulltext_with_failed_graph_still_returns_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The graph arm only boosts; its failure alone is not an outage."""
+    svc = HybridSearchService()
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {
+            SearchSourceType.FULLTEXT: _ok(SearchSourceType.FULLTEXT),
+            SearchSourceType.KNOWLEDGE_GRAPH: _failed(
+                SearchSourceType.KNOWLEDGE_GRAPH, "neo4j down"
+            ),
+        },
+    )
+
+    def _no_fallback(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("a healthy full-text arm must not fall back")
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _no_fallback)
+
+    response = svc.search(_request(), "user-1", ORG_ID)
+    assert response.results == []
