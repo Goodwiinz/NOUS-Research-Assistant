@@ -286,7 +286,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
             raise BranchAccessError(409, "PDF chat files are unavailable")
 
     defaults = [
-        {"retrieved_contexts": []},
+        {"retrieved_contexts": [], "retrieval_status": "error"},
         {"intent": "general", "intent_confidence": 0.0},
         {"user_memories": []},
     ]
@@ -306,6 +306,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         "user_confirmed": False,
         "pending_confirmation": {},
         "page_filter": None,
+        "retrieval_status": None,
         "turn_index": int(state.get("turn_index") or 0) + 1,
         # compaction_count is documented "reset per turn" (state.py) but was
         # omitted, so it accumulated for the life of the thread. _force_-
@@ -338,7 +339,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
             # pattern: jobs.py / classifier.py / error_recovery.py).
             raise result
         if isinstance(result, Exception):
-            logger.warning("Preprocessing subtask failed: %s", result)
+            logger.warning("Preprocessing subtask failed: %s", result, exc_info=result)
             merged.update(default)
         else:
             merged.update(result)

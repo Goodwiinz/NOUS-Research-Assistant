@@ -66,7 +66,7 @@ async def test_all_filtered_primary_read_does_not_fall_back(
         _nodes_rag, "_try_primary_do_kb_read", AsyncMock(return_value=[])
     )
     fallback = AsyncMock(side_effect=AssertionError("must not fall back"))
-    monkeypatch.setattr(_nodes_rag, "_legacy_hybrid_search_fallback", fallback)
+    monkeypatch.setattr(_nodes_rag, "_hybrid_search_fallback_with_status", fallback)
 
     project_id = "5ed25258-5ad2-4b06-9678-4a4abe5ecac1"
     state = {

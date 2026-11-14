@@ -29,6 +29,41 @@ NO_RETRIEVAL_GUIDANCE = (
     "bibliography."
 )
 
+# NO_RETRIEVAL_GUIDANCE tells the model the corpus has nothing relevant. That
+# is only true when retrieval ran and came back empty. When it was skipped (no
+# active project) or failed, the same text made the model tell users their
+# documents were missing while they were indexed.
+RETRIEVAL_SKIPPED_GUIDANCE = (
+    "Automatic document retrieval did not run for this turn, so no documents "
+    "are shown here. This says nothing about what the user's corpus contains. "
+    "If the question concerns the user's documents, search them with "
+    "do_kb_retrieve before answering, and never claim nothing was found "
+    "without searching. Do NOT invent citations, paper references, or a "
+    "bibliography."
+)
+RETRIEVAL_FAILED_GUIDANCE = (
+    "Automatic document retrieval failed for this turn because of a system "
+    "error, so no documents are shown here. Do not tell the user their corpus "
+    "has nothing relevant. If the question concerns their documents, try "
+    "do_kb_retrieve; if that also fails, say that document search is "
+    "temporarily unavailable. Do NOT invent citations, paper references, or a "
+    "bibliography."
+)
+
+
+def no_retrieval_guidance(retrieval_status: Any) -> str:
+    """Guidance for a turn with no retrieved context, by why it is empty.
+
+    ``retrieval_status`` is set by ``rag_node``: ``"skipped"`` or ``"error"``
+    select the matching text; anything else (``"empty"``, unset, unknown)
+    keeps the original "nothing relevant was found" wording.
+    """
+    if retrieval_status == "skipped":
+        return RETRIEVAL_SKIPPED_GUIDANCE
+    if retrieval_status == "error":
+        return RETRIEVAL_FAILED_GUIDANCE
+    return NO_RETRIEVAL_GUIDANCE
+
 
 def _reject(execution: Mapping[str, Any], category: str) -> None:
     logger.warning(
@@ -300,8 +335,11 @@ def retrieval_prompt_blocks(
 __all__ = [
     "MAX_RETRIEVED_CONTEXTS",
     "NO_RETRIEVAL_GUIDANCE",
+    "RETRIEVAL_FAILED_GUIDANCE",
+    "RETRIEVAL_SKIPPED_GUIDANCE",
     "contexts_from_tool_execution",
     "merge_retrieved_contexts",
+    "no_retrieval_guidance",
     "retrieval_prompt_blocks",
     "render_retrieval_prompt",
 ]

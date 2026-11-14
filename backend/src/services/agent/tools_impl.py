@@ -3495,18 +3495,18 @@ async def _tool_search_documents(
         return tool_error_payload("search_documents", e)
 
 
-async def _local_scoped_fulltext_retrieve(
+async def _local_fulltext_chunks(
     *,
     query: str,
-    document_ids: list[UUID],
     current_user: User,
     top_k: int,
-) -> Dict[str, Any]:
-    """Retrieve evidence locally when a named-document request cannot use DO KB.
+    document_ids: Optional[list[UUID]] = None,
+) -> list[Dict[str, Any]]:
+    """Org-scoped PostgreSQL full-text read shaped as ``do_kb_retrieve`` chunks.
 
-    The explicit document IDs have already been authorized by the caller.
-    PostgreSQL still applies both the organization predicate and those IDs, so
-    this AWS-side fallback cannot widen a named-source request.
+    ``organization_id`` is always applied by the search service (fail closed);
+    ``document_ids``, when given, narrows further and must already be
+    authorized by the caller. Errors propagate so callers can report them.
     """
     from src.models.search_schemas import (
         SearchFilter,
@@ -3517,12 +3517,17 @@ async def _local_scoped_fulltext_retrieve(
     from src.services.agent._pii_redact import redact_pii
     from src.services.search.fulltext_search_service import fulltext_search_service
 
+    filters = (
+        SearchFilter(document_ids=[str(doc_id) for doc_id in document_ids])
+        if document_ids is not None
+        else None
+    )
     request = SearchQuery(
         query=query,
         search_type=SearchType.FULLTEXT,
         sort_order=SearchSortOrder.RELEVANCE,
         limit=top_k,
-        filters=SearchFilter(document_ids=[str(doc_id) for doc_id in document_ids]),
+        filters=filters,
         snippet_length=500,
     )
     response = await asyncio.to_thread(
@@ -3532,7 +3537,7 @@ async def _local_scoped_fulltext_retrieve(
         organization_id=str(current_user.organization_id),
     )
 
-    chunks = []
+    chunks: list[Dict[str, Any]] = []
     for result in response.results[:top_k]:
         evidence = "\n".join(
             snippet.text.strip()
@@ -3553,6 +3558,28 @@ async def _local_scoped_fulltext_retrieve(
                 "metadata": {"retrieval_backend": "postgres_fulltext"},
             }
         )
+    return chunks
+
+
+async def _local_scoped_fulltext_retrieve(
+    *,
+    query: str,
+    document_ids: list[UUID],
+    current_user: User,
+    top_k: int,
+) -> Dict[str, Any]:
+    """Retrieve evidence locally when a named-document request cannot use DO KB.
+
+    The explicit document IDs have already been authorized by the caller.
+    PostgreSQL still applies both the organization predicate and those IDs, so
+    this AWS-side fallback cannot widen a named-source request.
+    """
+    chunks = await _local_fulltext_chunks(
+        query=query,
+        current_user=current_user,
+        top_k=top_k,
+        document_ids=document_ids,
+    )
 
     if not chunks:
         return {
@@ -3572,6 +3599,115 @@ async def _local_scoped_fulltext_retrieve(
         "source": "postgres_fulltext",
         "note": "Evidence is restricted to the authorized document IDs.",
         "evidence_mode": False,
+    }
+
+
+async def _local_unscoped_fulltext_retrieve(
+    *,
+    query: str,
+    db: Optional[AsyncSession],
+    current_user: User,
+    top_k: int,
+    project_id: Optional[str],
+) -> Dict[str, Any]:
+    """Topical retrieval over PostgreSQL full-text when no knowledge base is on.
+
+    This is the live retrieval backend whenever DO KB and Bedrock are both off
+    (the AWS dev lane). It used to return an empty ``reason: "disabled"``
+    payload with no ``error`` key, which the tool layer recorded as a
+    successful empty search, so the model told users nothing was indexed.
+
+    Scope: always the caller's organization. With a project, the project is
+    authorized with ``_verify_project_ownership`` and the read is narrowed to
+    its live member documents. A stale or unowned page project degrades to
+    org-wide, matching the knowledge-base branch of ``_tool_do_kb_retrieve``.
+    Failures return an ``error`` key so they are reported, not read as
+    "no results".
+    """
+    from src.core.database import engine
+
+    if engine.dialect.name != "postgresql":
+        return {
+            "error": "Document retrieval is unavailable",
+            "chunks": [],
+            "total": 0,
+            "source": "postgres_fulltext",
+            "reason": "fulltext_unavailable",
+        }
+
+    document_ids: Optional[list[UUID]] = None
+    if project_id and db is not None:
+        try:
+            project = await _verify_project_ownership(project_id, db, current_user)
+            if project is None:
+                # Same degradation as the knowledge-base path below: the id
+                # usually comes from page context, which can be stale or name
+                # another member's project (trace 01a0209b). Org scope still
+                # applies, and org-wide results reveal nothing about it.
+                logger.warning(
+                    "do_kb_retrieve: project %s not found/owned; "
+                    "falling back to org-wide full-text retrieval",
+                    project_id,
+                )
+            else:
+                rows = await db.execute(
+                    select(CollectionDocument.document_id).where(
+                        CollectionDocument.collection_id == project.id,
+                        CollectionDocument.is_deleted == False,  # noqa: E712
+                    )
+                )
+                document_ids = [UUID(str(doc_id)) for doc_id in rows.scalars().all()]
+                if not document_ids:
+                    return {
+                        "chunks": [],
+                        "total": 0,
+                        "source": "postgres_fulltext",
+                        "reason": "project_has_no_documents",
+                    }
+        except Exception:
+            logger.warning(
+                "do_kb_retrieve: project document resolution failed", exc_info=True
+            )
+            return {
+                "error": "Project documents could not be resolved",
+                "chunks": [],
+                "total": 0,
+                "source": "postgres_fulltext",
+                "reason": "project_unavailable",
+            }
+
+    try:
+        chunks = await _local_fulltext_chunks(
+            query=query,
+            current_user=current_user,
+            top_k=top_k,
+            document_ids=document_ids,
+        )
+    except Exception:
+        logger.warning("PostgreSQL full-text retrieval failed", exc_info=True)
+        return {
+            "error": "Document retrieval failed",
+            "chunks": [],
+            "total": 0,
+            "source": "postgres_fulltext",
+            "reason": "local_fulltext_search_failed",
+        }
+
+    if not chunks:
+        return {
+            "chunks": [],
+            "total": 0,
+            "source": "postgres_fulltext",
+            "reason": "no_matches",
+            "note": (
+                "No indexed document content matched this query. Try different "
+                "keywords before telling the user nothing was found."
+            ),
+        }
+    return {
+        "chunks": chunks,
+        "total": len(chunks),
+        "source": "postgres_fulltext",
     }
 
 
@@ -3645,7 +3781,13 @@ async def _tool_do_kb_retrieve(
     bedrock_enabled = isinstance(bedrock_kb_id, str) and bool(bedrock_kb_id)
     kb_enabled = getattr(_kb_settings, "DO_KB_ENABLED", False) or bedrock_enabled
     if not kb_enabled and not scoped_intent:
-        return {"chunks": [], "total": 0, "source": "do_kb", "reason": "disabled"}
+        return await _local_unscoped_fulltext_retrieve(
+            query=query,
+            db=db,
+            current_user=current_user,
+            top_k=top_k,
+            project_id=scope_project_id,
+        )
 
     resolved_project_id: Optional[str] = None
     if scoped_intent:

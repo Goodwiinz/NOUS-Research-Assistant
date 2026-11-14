@@ -64,6 +64,7 @@ def turn_reset_fields() -> dict[str, Any]:
     """
     return {
         "retrieved_contexts": [],
+        "retrieval_status": None,
         "selection_page_range": None,
         "page_filter_model": None,
         "branch_document_id": None,
