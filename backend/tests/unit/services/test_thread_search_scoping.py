@@ -14,8 +14,8 @@ import pytest
 
 from src.services.threads.thread_message_search_service import (
     MessageSearchRequest,
-    ThreadSearchRequest,
     ThreadMessageSearchService,
+    ThreadSearchRequest,
 )
 
 pytestmark = pytest.mark.unit

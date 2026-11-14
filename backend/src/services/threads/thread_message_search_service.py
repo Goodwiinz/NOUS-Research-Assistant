@@ -570,7 +570,9 @@ class ThreadMessageSearchService:
             # Both CTEs also drop legacy shadow agent threads, like the
             # thread/message builders; without it every /chat turn matched twice.
             thread_filters = _EXCLUDE_LEGACY_AGENT_THREADS + _WORKSPACE_ACCESS_PREDICATE
-            message_filters = _EXCLUDE_LEGACY_AGENT_THREADS + _WORKSPACE_ACCESS_PREDICATE
+            message_filters = (
+                _EXCLUDE_LEGACY_AGENT_THREADS + _WORKSPACE_ACCESS_PREDICATE
+            )
             params = {
                 "query": search_terms,
                 "limit": limit,
