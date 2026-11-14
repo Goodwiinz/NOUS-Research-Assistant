@@ -7,7 +7,7 @@ tests use SQLite in-memory database instead of PostgreSQL. This prevents the
 PostgreSQL server running.
 
 This module also provides the shared fixtures for the integration suite:
-  - Auto-mocking of external services (Redis, Qdrant, Neo4j) and Celery.
+  - Auto-mocking of external services (Redis, Neo4j) and Celery.
   - Optional testcontainers-backed PostgreSQL/Redis fixtures, gated behind
     @pytest.mark.requires_postgres / @pytest.mark.requires_redis.
   - Async SQLite database + HTTP client fixtures plus the model fixtures used
@@ -160,7 +160,6 @@ def mock_external_services(request):
         patches.append(patch("redis.Redis"))
         patches.append(patch("redis.asyncio.Redis"))
 
-    patches.append(patch("qdrant_client.QdrantClient"))
     patches.append(patch("neo4j.GraphDatabase.driver"))
 
     # Apply patches
@@ -188,13 +187,6 @@ def mock_external_services(request):
         mock_async_redis.return_value = mock_async_redis_instance
         mock_async_redis.from_url.return_value = mock_async_redis_instance
         mock_idx += 1
-
-    # Qdrant mock
-    mock_qdrant = mocks[mock_idx]
-    mock_qdrant_instance = Mock()
-    mock_qdrant_instance.get_collections.return_value = Mock(collections=[])
-    mock_qdrant.return_value = mock_qdrant_instance
-    mock_idx += 1
 
     # Neo4j mock
     mock_neo4j = mocks[mock_idx]

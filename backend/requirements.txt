@@ -47,11 +47,6 @@ transformers>=4.36.0
 torch>=2.1.0,<3.0.0
 huggingface_hub>=0.20.0
 
-# Vector Database
-# Pin to avoid CI import crash in older qdrant-client builds
-# (`TypeError: EnumTypeWrapper | NoneType` from grpc_uploader.py)
-qdrant-client==1.19.1
-
 # Graph Database
 neo4j==6.4.1
 

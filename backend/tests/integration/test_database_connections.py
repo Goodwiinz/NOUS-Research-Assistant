@@ -2,19 +2,18 @@
 Integration tests for database connections and operations
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, patch
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
-import redis
-import qdrant_client
-from neo4j import GraphDatabase
-import time
-
 import sys
+import time
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+import pytest
+import redis
+from neo4j import GraphDatabase
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # Add parent directory to path to import conftest_fastapi
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -99,7 +98,7 @@ class TestPostgreSQLIntegration:
         engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool
+            poolclass=StaticPool,
         )
 
         with pytest.raises(Exception):  # Should raise some kind of database error
@@ -180,104 +179,6 @@ class TestRedisIntegration:
             mock_redis_client.get("test_key")
 
 
-class TestQdrantIntegration:
-    """Integration tests for Qdrant vector database"""
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_client_creation(self, mock_qdrant_client):
-        """Test Qdrant client creation"""
-        # Client should be properly mocked
-        assert mock_qdrant_client is not None
-        assert hasattr(mock_qdrant_client, 'upsert')
-        assert hasattr(mock_qdrant_client, 'search')
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_collection_operations(self, mock_qdrant_client):
-        """Test Qdrant collection operations"""
-        collection_name = "test_collection"
-
-        # Test collection creation
-        mock_qdrant_client.create_collection(collection_name, vectors_config={"size": 384, "distance": "Cosine"})
-
-        # Verify method calls
-        mock_qdrant_client.create_collection.assert_called_once()
-
-        # Test collection existence check
-        mock_qdrant_client.get_collection.return_value = Mock()
-        collection_info = mock_qdrant_client.get_collection(collection_name)
-        assert collection_info is not None
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_vector_upsert(self, mock_qdrant_client):
-        """Test Qdrant vector upsert operations"""
-        collection_name = "test_collection"
-        vectors = [
-            {"id": "vec_1", "vector": [0.1, 0.2, 0.3]},
-            {"id": "vec_2", "vector": [0.4, 0.5, 0.6]}
-        ]
-
-        # Test upsert operation
-        mock_qdrant_client.upsert(collection_name, vectors)
-
-        # Verify method calls
-        mock_qdrant_client.upsert.assert_called_once_with(collection_name, vectors)
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_vector_search(self, mock_qdrant_client):
-        """Test Qdrant vector search operations"""
-        collection_name = "test_collection"
-        query_vector = [0.1, 0.2, 0.3]
-        search_results = [
-            {"id": "vec_1", "score": 0.95},
-            {"id": "vec_2", "score": 0.87}
-        ]
-
-        # Setup mock response
-        mock_qdrant_client.search.return_value = search_results
-
-        # Test search operation
-        results = mock_qdrant_client.search(
-            collection_name=collection_name,
-            query_vector=query_vector,
-            limit=10
-        )
-
-        # Verify results
-        assert results == search_results
-        assert len(results) == 2
-
-        # Verify method calls
-        mock_qdrant_client.search.assert_called_once()
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_collection_deletion(self, mock_qdrant_client):
-        """Test Qdrant collection deletion"""
-        collection_name = "test_collection"
-
-        # Test collection deletion
-        mock_qdrant_client.delete_collection(collection_name)
-
-        # Verify method calls
-        mock_qdrant_client.delete_collection.assert_called_once_with(collection_name)
-
-    @pytest.mark.integration
-    @pytest.mark.database
-    def test_qdrant_error_handling(self, mock_qdrant_client):
-        """Test Qdrant error handling"""
-        collection_name = "nonexistent_collection"
-
-        # Simulate collection not found error
-        mock_qdrant_client.get_collection.side_effect = Exception("Collection not found")
-
-        with pytest.raises(Exception):
-            mock_qdrant_client.get_collection(collection_name)
-
-
 class TestNeo4jIntegration:
     """Integration tests for Neo4j graph database"""
 
@@ -287,8 +188,8 @@ class TestNeo4jIntegration:
         """Test Neo4j driver creation"""
         # Driver should be properly mocked
         assert mock_neo4j_driver is not None
-        assert hasattr(mock_neo4j_driver, 'session')
-        assert hasattr(mock_neo4j_driver, 'verify_connectivity')
+        assert hasattr(mock_neo4j_driver, "session")
+        assert hasattr(mock_neo4j_driver, "verify_connectivity")
 
     @pytest.mark.integration
     @pytest.mark.database
@@ -353,7 +254,7 @@ class TestNeo4jIntegration:
         mock_result = Mock()
         mock_result.data.return_value = [
             {"n": {"name": "Node1", "type": "Document"}},
-            {"n": {"name": "Node2", "type": "Entity"}}
+            {"n": {"name": "Node2", "type": "Entity"}},
         ]
         session.run.return_value = mock_result
 
@@ -392,7 +293,9 @@ class TestMultiDatabaseIntegration:
 
     @pytest.mark.integration
     @pytest.mark.database
-    def test_cross_database_transaction_consistency(self, mock_db_session, mock_redis_client, mock_qdrant_client):
+    def test_cross_database_transaction_consistency(
+        self, mock_db_session, mock_redis_client, mock_qdrant_client
+    ):
         """Test consistency across multiple databases"""
         # Simulate a multi-database operation
         document_id = "doc_123"
@@ -400,10 +303,16 @@ class TestMultiDatabaseIntegration:
 
         try:
             # Ensure test table exists for SQLite-backed mock sessions.
-            mock_db_session.execute(text("CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, data TEXT)"))
+            mock_db_session.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, data TEXT)"
+                )
+            )
             # 1. Save to PostgreSQL
-            mock_db_session.execute(text("INSERT INTO documents (id, data) VALUES (:id, :data)"),
-                                  {"id": document_id, "data": str(document_data)})
+            mock_db_session.execute(
+                text("INSERT INTO documents (id, data) VALUES (:id, :data)"),
+                {"id": document_id, "data": str(document_data)},
+            )
 
             # 2. Cache in Redis
             cache_key = f"document:{document_id}"
@@ -425,7 +334,9 @@ class TestMultiDatabaseIntegration:
     def test_database_failover_handling(self, mock_redis_client, mock_qdrant_client):
         """Test handling of database failover scenarios"""
         # Simulate Redis failure
-        mock_redis_client.get.side_effect = redis.ConnectionError("Redis connection failed")
+        mock_redis_client.get.side_effect = redis.ConnectionError(
+            "Redis connection failed"
+        )
 
         # Application should handle gracefully (e.g., fallback to database)
         try:
@@ -463,7 +374,9 @@ class TestMultiDatabaseIntegration:
 
     @pytest.mark.integration
     @pytest.mark.database
-    def test_database_health_checks(self, mock_db_engine, mock_redis_client, mock_qdrant_client, mock_neo4j_driver):
+    def test_database_health_checks(
+        self, mock_db_engine, mock_redis_client, mock_qdrant_client, mock_neo4j_driver
+    ):
         """Test health checks for all databases"""
         health_status = {}
 
@@ -505,7 +418,7 @@ class TestMultiDatabaseIntegration:
         """Test database connection timeout handling"""
         # This would test actual timeout scenarios
         # For unit tests, we'll mock timeout behavior
-        with patch('time.sleep', side_effect=InterruptedError("Timeout")):
+        with patch("time.sleep", side_effect=InterruptedError("Timeout")):
             with pytest.raises(InterruptedError):
                 # Simulate long-running query that times out
                 time.sleep(10)
