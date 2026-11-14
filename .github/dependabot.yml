@@ -70,6 +70,15 @@ updates:
       - "dependencies"
       - "python"
     groups:
+      # The opentelemetry-instrumentation-* packages pin an exact
+      # opentelemetry-instrumentation version, so they only install when they
+      # all move together. Bumped one at a time (#2111) or split across the
+      # minor/patch and major groups (#2107), pip fails with
+      # ResolutionImpossible. Dependabot assigns each dependency to the FIRST
+      # matching group, so this must stay above the catch-all groups below.
+      opentelemetry:
+        patterns:
+          - "opentelemetry-*"
       pip-minor-patch:
         patterns:
           - "*"
