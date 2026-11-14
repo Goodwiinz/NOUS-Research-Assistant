@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { triggerUpstreamError } from '@/lib/trigger-proxy';
 import { createClient } from '@/lib/supabase/server';
 
 const TRIGGER_API_URL =
@@ -57,11 +58,7 @@ export async function POST(request: NextRequest) {
   );
 
   if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json(
-      { error: `Trigger.dev error: ${text}` },
-      { status: res.status }
-    );
+    return triggerUpstreamError(res, 'agent run trigger');
   }
 
   const data = await res.json();

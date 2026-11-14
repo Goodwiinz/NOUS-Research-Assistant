@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import {
+  isTriggerRunId,
+  runNotFound,
+  triggerUpstreamError,
+} from '@/lib/trigger-proxy';
 
 const TRIGGER_API_URL =
   process.env.TRIGGER_API_URL ?? 'https://api.trigger.dev';
@@ -28,6 +33,9 @@ export async function POST(
   }
 
   const { runId } = await params;
+  if (!isTriggerRunId(runId)) {
+    return runNotFound();
+  }
   const body = await request.json();
   const { tokenId, confirmed } = body;
 
@@ -76,11 +84,7 @@ export async function POST(
   );
 
   if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json(
-      { error: `Trigger.dev error: ${text}` },
-      { status: res.status }
-    );
+    return triggerUpstreamError(res, 'waitpoint completion');
   }
 
   return NextResponse.json({ status: 'confirmed' });
