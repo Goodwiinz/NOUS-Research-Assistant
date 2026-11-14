@@ -135,7 +135,12 @@ def test_related_entities_route_returns_503(monkeypatch: pytest.MonkeyPatch) -> 
     )
     with pytest.raises(HTTPException) as info:
         kg.get_related_entities(
-            "e1", max_depth=2, min_strength=0.1, limit=10, current_user=USER, db=MagicMock()
+            "e1",
+            max_depth=2,
+            min_strength=0.1,
+            limit=10,
+            current_user=USER,
+            db=MagicMock(),
         )
     _assert_503(info.value)
 
@@ -148,7 +153,12 @@ def test_neighborhood_route_returns_503(monkeypatch: pytest.MonkeyPatch) -> None
     )
     with pytest.raises(HTTPException) as info:
         kg.get_entity_neighborhood(
-            "e1", max_depth=2, min_strength=0.1, limit=10, current_user=USER, db=MagicMock()
+            "e1",
+            max_depth=2,
+            min_strength=0.1,
+            limit=10,
+            current_user=USER,
+            db=MagicMock(),
         )
     _assert_503(info.value)
 

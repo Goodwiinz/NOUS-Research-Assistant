@@ -22,11 +22,9 @@ from neo4j.exceptions import ServiceUnavailable
 
 from src.core.circuit_breaker import ServiceUnavailableError as CircuitBreakerError
 from src.models.graph import UpdateEntityRequest
-from src.services.knowledge_graph.knowledge_graph_service import (
-    KnowledgeGraphService,
-)
-from src.services.search.hybrid_search_service import HybridSearchService
 from src.models.search_schemas import SearchQuery, SearchType
+from src.services.knowledge_graph.knowledge_graph_service import KnowledgeGraphService
+from src.services.search.hybrid_search_service import HybridSearchService
 
 pytestmark = pytest.mark.unit
 
@@ -160,7 +158,10 @@ def test_delete_genuine_miss_returns_false() -> None:
     ctx.__exit__ = MagicMock(return_value=False)
     ctx.run.return_value = result
     with patch(GET_SESSION, MagicMock(return_value=ctx)):
-        assert KnowledgeGraphService().delete_entity("missing", organization_id=ORG) is False
+        assert (
+            KnowledgeGraphService().delete_entity("missing", organization_id=ORG)
+            is False
+        )
 
 
 def test_hybrid_graph_arm_reports_failure_when_neo4j_down() -> None:
