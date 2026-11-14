@@ -129,6 +129,22 @@ def _is_neo4j_unavailable_error(error: Exception) -> bool:
     return "circuit breaker is open" in message or "service unavailable" in message
 
 
+def _raise_kg_http_error(error: Exception, context: str) -> None:
+    """Map a KnowledgeGraphService failure to a stable public HTTP error.
+
+    The service re-raises driver/breaker/query errors instead of returning
+    empty values (audit #2123 item 4), so a Neo4j outage becomes a 503 here
+    rather than a 404 "Entity not found" or a 200 with no results. Detail text
+    is fixed; raw exception text never reaches the client.
+    """
+    logger.error("Error %s", context, exc_info=True)
+    if _is_neo4j_unavailable_error(error):
+        raise HTTPException(
+            status_code=503, detail="Knowledge graph temporarily unavailable"
+        )
+    raise HTTPException(status_code=500, detail="Internal server error")
+
+
 class MergeJobEntityRef(BaseModel):
     id: str
     name: str
@@ -256,8 +272,7 @@ def search_entities(
         )
         return entities
     except Exception as e:
-        logger.error(f"Error searching entities: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "searching entities")
 
 
 @router.get("/entities/{entity_id}", response_model=EntityResponse)
@@ -270,10 +285,14 @@ def get_entity(
     org_id = _require_org_id(current_user)
     # Org-wide scope: filter by the indexed organization_id (stamped on every
     # entity by write-path + backfill), no per-request document-id list needed.
-    entity = knowledge_graph_service.get_entity(
-        entity_id,
-        organization_id=org_id,
-    )
+    try:
+        entity = knowledge_graph_service.get_entity(
+            entity_id,
+            organization_id=org_id,
+        )
+    except Exception as e:
+        # A Neo4j outage must not be reported as a missing entity.
+        _raise_kg_http_error(e, "retrieving entity")
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
@@ -288,11 +307,14 @@ def update_entity(
 ):
     """Update an existing entity"""
     org_id = _require_org_id(current_user)
-    entity = knowledge_graph_service.update_entity(
-        entity_id,
-        request,
-        organization_id=org_id,
-    )
+    try:
+        entity = knowledge_graph_service.update_entity(
+            entity_id,
+            request,
+            organization_id=org_id,
+        )
+    except Exception as e:
+        _raise_kg_http_error(e, "updating entity")
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
@@ -306,10 +328,13 @@ def delete_entity(
 ):
     """Delete an entity and all its relationships"""
     org_id = _require_org_id(current_user)
-    success = knowledge_graph_service.delete_entity(
-        entity_id,
-        organization_id=org_id,
-    )
+    try:
+        success = knowledge_graph_service.delete_entity(
+            entity_id,
+            organization_id=org_id,
+        )
+    except Exception as e:
+        _raise_kg_http_error(e, "deleting entity")
     if not success:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"message": "Entity deleted successfully"}
@@ -374,12 +399,7 @@ def get_all_entities(
             has_more=(offset + len(entities)) < total,
         )
     except Exception as e:
-        logger.error("Error getting entities", exc_info=True)
-        if _is_neo4j_unavailable_error(e):
-            raise HTTPException(
-                status_code=503, detail="Knowledge graph temporarily unavailable"
-            )
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "getting entities")
 
 
 @router.get(
@@ -432,8 +452,7 @@ def get_related_entities(
         )
         return entities
     except Exception as e:
-        logger.error(f"Error finding related entities: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "finding related entities")
 
 
 @router.get("/entities/{entity_id}/neighborhood")
@@ -461,8 +480,7 @@ def get_entity_neighborhood(
         )
         return data
     except Exception as e:
-        logger.error(f"Error getting neighborhood: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "getting neighborhood")
 
 
 # Relationship Management Endpoints
@@ -656,8 +674,7 @@ def search_graph(
             search_time=search_time,
         )
     except Exception as e:
-        logger.error(f"Error performing graph search: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "performing graph search")
 
 
 @router.get("/paths/{source_id}/{target_id}", response_model=List[GraphPath])
@@ -760,7 +777,12 @@ def create_merge_job(
     org_id = str(current_user.organization_id)
     entity_source_docs: Dict[str, str] = {}
     for entity_id in entity_ids:
-        entity = knowledge_graph_service.get_entity(entity_id, organization_id=org_id)
+        try:
+            entity = knowledge_graph_service.get_entity(
+                entity_id, organization_id=org_id
+            )
+        except Exception as e:
+            _raise_kg_http_error(e, "validating merge job entities")
         if not entity:
             raise HTTPException(
                 status_code=404, detail=f"Entity not found: {entity_id}"
@@ -1118,8 +1140,7 @@ def get_document_entities(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting document entities: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "getting document entities")
 
 
 # Analytics and Statistics Endpoints
@@ -1148,8 +1169,7 @@ def get_graph_analytics(
         )
         return analytics
     except Exception as e:
-        logger.error(f"Error getting graph analytics: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "getting graph analytics")
 
 
 @router.get("/health", response_model=GraphHealthStatus)
@@ -1272,8 +1292,7 @@ def get_entity_visualization(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error generating visualization data: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        _raise_kg_http_error(e, "generating visualization data")
 
 
 # Entity Type and Relationship Management

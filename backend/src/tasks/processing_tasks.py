@@ -1427,12 +1427,13 @@ def kg_merge_entities_job(self, job_id: str):
                         # below is kept instead of DETACH DELETEd with that edge.
                         knowledge_graph_service.create_relationship(create_request)
 
-                    # delete_entity swallows Neo4j errors and returns False (and
-                    # also returns False when the node is already gone). The
-                    # relationships were already re-pointed onto the primary, so
-                    # a failure here leaves the duplicate node alive alongside
-                    # duplicated edges — NOT a merged group. Track it so the
-                    # group is reported failed instead of a false success.
+                    # delete_entity returns False when the node is already gone
+                    # and raises on a Neo4j error (caught by the outer except,
+                    # which counts the group failed). The relationships were
+                    # already re-pointed onto the primary, so a failure here
+                    # leaves the duplicate node alive alongside duplicated edges
+                    # — NOT a merged group. Track it so the group is reported
+                    # failed instead of a false success.
                     if not knowledge_graph_service.delete_entity(
                         duplicate_id, organization_id=job_org_id
                     ):

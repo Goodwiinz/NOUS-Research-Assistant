@@ -878,8 +878,10 @@ class KnowledgeGraphService:
                     ),
                 )
         except Exception as e:
+            # Re-raise: a driver/breaker/query failure must not read as "not
+            # found" (audit #2123 item 4). Routes map it to 503.
             logger.error(f"Error retrieving entity {entity_id}: {e}")
-            return None
+            raise
 
     def update_entity(
         self,
@@ -955,7 +957,7 @@ class KnowledgeGraphService:
                 )
         except Exception as e:
             logger.error(f"Error updating entity {entity_id}: {e}")
-            return None
+            raise
 
     def delete_entity(
         self,
@@ -988,7 +990,7 @@ class KnowledgeGraphService:
                     return False
         except Exception as e:
             logger.error(f"Error deleting entity {entity_id}: {e}")
-            return False
+            raise
 
     def delete_document_graph(
         self,
@@ -1282,8 +1284,9 @@ class KnowledgeGraphService:
 
                 return entities
         except Exception as e:
+            # Re-raise like get_all_entities: an outage is not an empty graph.
             logger.error(f"Error searching entities: {e}")
-            return []
+            raise
 
     def get_all_entities(
         self,
@@ -1435,7 +1438,7 @@ class KnowledgeGraphService:
                 return record["total"] if record else 0
         except Exception as e:
             logger.error(f"Error counting entities: {e}")
-            return 0
+            raise
 
     def get_all_relationships(
         self,
@@ -2076,7 +2079,7 @@ class KnowledgeGraphService:
                 return entities
         except Exception as e:
             logger.error(f"Error finding related entities for {entity_id}: {e}")
-            return []
+            raise
 
     def get_neighborhood(
         self,
@@ -2246,7 +2249,7 @@ class KnowledgeGraphService:
                 return {"entities": entities, "relationships": edges}
         except Exception as e:
             logger.error(f"Error getting neighborhood for {entity_id}: {e}")
-            return {"entities": [], "relationships": []}
+            raise
 
     def find_paths(
         self,
@@ -2868,7 +2871,7 @@ class KnowledgeGraphService:
                 )
         except Exception as e:
             logger.error(f"Error getting graph analytics: {e}")
-            return GraphAnalytics()
+            raise
 
     def get_health_status(
         self, organization_id: Optional[str] = None
