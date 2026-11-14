@@ -11,6 +11,7 @@ from typing import Any
 
 from celery import Celery
 from celery.signals import worker_process_init
+
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
