@@ -11,7 +11,6 @@ from typing import Any
 
 from celery import Celery
 from celery.signals import worker_process_init
-
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,12 @@ celery_app.conf.update(
     broker_transport_options={
         "socket_connect_timeout": 5,
         "socket_timeout": 5,
+        # Kombu's Redis default, pinned because replay_guard.py depends on it:
+        # an unacked message (task_acks_late) is redelivered after this many
+        # seconds, which must exceed every task's hard time limit and
+        # DEFAULT_STALE_RUNNING_SECONDS, or a live task gets a second copy.
+        # Guarded by tests/unit/tasks/test_celery_config.py.
+        "visibility_timeout": 3600,
     },
     task_publish_retry_policy={
         "max_retries": 1,

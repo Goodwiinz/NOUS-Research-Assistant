@@ -45,7 +45,7 @@ spec:
       # the Service/ingress deregister this pod before SIGTERM; the app's
       # lifespan shutdown then closes remaining sockets with code 1001. Must
       # exceed the preStop sleep plus the socket-close time.
-      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds | default 45 }}
+      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds | default 60 }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       initContainers:
