@@ -92,3 +92,43 @@ def test_resolver_failure_is_rejected() -> None:
 
     with pytest.raises(UnsafeDestinationError):
         assert_public_https_url("https://nope.example.com/", resolver=failing)
+
+
+class _FakeResolver:
+    def __init__(self, hosts: list[str]) -> None:
+        self.hosts = hosts
+        self.closed = False
+
+    async def resolve(self, host: str, port: int = 0, family: int = 0) -> list[dict]:
+        return [
+            {"hostname": host, "host": h, "port": port, "family": family,
+             "proto": 0, "flags": 0}
+            for h in self.hosts
+        ]
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hosts", [["127.0.0.1"], ["93.184.216.34", "10.0.0.5"], ["169.254.169.254"], []]
+)
+async def test_public_only_resolver_refuses_non_public_answers(hosts: list[str]) -> None:
+    from src.utils.outbound_url_guard import PublicOnlyResolver, UnsafeDestinationError
+
+    resolver = PublicOnlyResolver(_FakeResolver(hosts))  # type: ignore[arg-type]
+    with pytest.raises(UnsafeDestinationError):
+        await resolver.resolve("example.com", 443)
+
+
+@pytest.mark.asyncio
+async def test_public_only_resolver_passes_public_answers() -> None:
+    from src.utils.outbound_url_guard import PublicOnlyResolver
+
+    inner = _FakeResolver(["93.184.216.34"])
+    resolver = PublicOnlyResolver(inner)  # type: ignore[arg-type]
+    results = await resolver.resolve("example.com", 443)
+    assert [r["host"] for r in results] == ["93.184.216.34"]
+    await resolver.close()
+    assert inner.closed

@@ -98,3 +98,36 @@ async def test_deliver_webhook_upload_uses_multipart_without_redirects(
     assert b'filename="r.pdf"' in body
     assert b"%PDF-test-report" in body
     assert b'name="report_id"\r\n\r\nr1' in body
+
+
+def _addrinfo(ip: str) -> list[Any]:
+    import socket
+
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))]
+
+
+@pytest.mark.asyncio
+async def test_deliver_webhook_refuses_dns_rebinding_at_connect(
+    tmp_path: Path,
+) -> None:
+    """The pre-flight check resolved the host to a public address; the HTTP
+    client resolved it again at connect time. A DNS answer that flips to a
+    private address in between (rebinding) used to reach an internal host.
+    The connect-time resolution must be re-checked."""
+    service = ReportGenerationService()
+    report = SimpleNamespace(id="r1", name="n", title="t", output_format="pdf")
+    file_path = tmp_path / "r.pdf"
+    file_path.write_bytes(b"x")
+
+    answers = iter([_addrinfo("93.184.216.34"), _addrinfo("127.0.0.1")])
+
+    def flipping_getaddrinfo(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return next(answers)
+
+    with patch("socket.getaddrinfo", side_effect=flipping_getaddrinfo):
+        with pytest.raises(UnsafeDestinationError):
+            await service._deliver_webhook(
+                report,  # type: ignore[arg-type]
+                file_path,
+                {"webhook": {"url": "https://rebind.example/hook"}},
+            )

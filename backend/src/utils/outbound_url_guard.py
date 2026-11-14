@@ -9,15 +9,21 @@ Teredo, NAT64 64:ff9b::/96) are checked against the embedded address too.
 A hostname is rejected if any of its resolved addresses is non-public.
 
 This is a pre-flight check: the HTTP client resolves the name again, so
-callers must also disable redirects. It does not pin the resolved address.
+callers must also disable redirects. ``assert_public_https_url`` alone does
+not pin the resolved address; aiohttp callers close that window (DNS
+rebinding) by connecting through ``PublicOnlyResolver``, which re-checks
+every address the client resolves at connect time.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable, List, Optional
 from urllib.parse import urlsplit
+
+from aiohttp.abc import AbstractResolver
+from aiohttp.resolver import ThreadedResolver
 
 Resolver = Callable[[str], Iterable[str]]
 
@@ -109,3 +115,33 @@ def assert_public_https_url(url: str, *, resolver: Resolver | None = None) -> No
     for address in addresses:
         if not _is_public(address):
             raise UnsafeDestinationError("webhook url resolves to a non-public address")
+
+
+class PublicOnlyResolver(AbstractResolver):
+    """aiohttp resolver that refuses any non-public answer at connect time.
+
+    ``assert_public_https_url`` checks the destination before the request, but
+    aiohttp resolves the hostname again when it connects. A DNS answer that
+    changes in between (rebinding) would otherwise reach an internal address.
+    Use as ``aiohttp.TCPConnector(resolver=PublicOnlyResolver())``. Literal IP
+    hosts bypass resolvers in aiohttp, so keep the pre-flight check too.
+    """
+
+    def __init__(self, inner: Optional[AbstractResolver] = None) -> None:
+        self._inner = inner or ThreadedResolver()
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> List[Any]:
+        results = await self._inner.resolve(host, port, family)
+        if not results:
+            raise UnsafeDestinationError("webhook host did not resolve")
+        for result in results:
+            if not _is_public(str(result["host"])):
+                raise UnsafeDestinationError(
+                    "webhook url resolves to a non-public address"
+                )
+        return results
+
+    async def close(self) -> None:
+        await self._inner.close()

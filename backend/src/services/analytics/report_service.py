@@ -32,9 +32,16 @@ from src.models.analytics.analytics_models import (
 )
 from src.models.analytics.dashboard_models import Dashboard
 from src.models.base import GUID
-from src.utils.outbound_url_guard import assert_public_https_url
+from src.utils.outbound_url_guard import PublicOnlyResolver, assert_public_https_url
 
 logger = logging.getLogger(__name__)
+
+
+def _public_only_session() -> aiohttp.ClientSession:
+    """Session whose connector re-checks every resolved address (DNS rebinding)."""
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(resolver=PublicOnlyResolver())
+    )
 
 
 class ReportGenerationService:
@@ -707,7 +714,7 @@ class ReportGenerationService:
             for key, value in payload.items():
                 form.add_field(key, str(value))
             form.add_field("file", file_data, filename=file_path.name)
-            async with aiohttp.ClientSession() as session:
+            async with _public_only_session() as session:
                 async with session.post(
                     url, data=form, allow_redirects=False
                 ) as response:
@@ -716,7 +723,7 @@ class ReportGenerationService:
                     else:
                         logger.info("Webhook delivered successfully")
         else:
-            async with aiohttp.ClientSession() as session:
+            async with _public_only_session() as session:
                 async with session.post(
                     url, json=payload, allow_redirects=False
                 ) as response:
