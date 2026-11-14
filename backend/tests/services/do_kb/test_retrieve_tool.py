@@ -271,9 +271,14 @@ async def test_unscoped_project_retrieval_is_narrowed_to_member_documents():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_unscoped_project_retrieval_fails_closed_on_unowned_project():
+async def test_unscoped_stale_project_degrades_to_org_wide_fulltext():
+    """A stale or unowned page project must not kill retrieval (trace 01a0209b).
+
+    Mirrors the knowledge-base branch: org scope still applies, the unverified
+    project is never used as a filter.
+    """
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
-    fulltext_search = MagicMock(return_value=_fulltext_hit(DISTRACTOR_ID))
+    fulltext_search = MagicMock(return_value=_fulltext_hit(TARGET_ID))
     verify = AsyncMock(return_value=None)
 
     p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
@@ -289,8 +294,37 @@ async def test_unscoped_project_retrieval_fails_closed_on_unowned_project():
             {"query": "attention"}, MagicMock(), user, project_id=str(UUID(int=7))
         )
 
-    assert result["error"] == "Project not found or not accessible"
-    assert result["chunks"] == []
+    assert "error" not in result
+    request = fulltext_search.call_args.kwargs["search_request"]
+    assert request.filters is None
+    assert fulltext_search.call_args.kwargs["organization_id"] == str(
+        user.organization_id
+    )
+    assert result["chunks"][0]["document_id"] == str(TARGET_ID)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_project_resolution_error_is_reported():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    fulltext_search = MagicMock(return_value=_fulltext_hit(TARGET_ID))
+    verify = AsyncMock(side_effect=RuntimeError("db down"))
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
+    with (
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        patch.object(tools_impl, "_verify_project_ownership", verify),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "attention"}, MagicMock(), user, project_id=str(UUID(int=7))
+        )
+
+    assert result["error"] == "Project documents could not be resolved"
+    assert "db down" not in str(result)
     fulltext_search.assert_not_called()
 
 

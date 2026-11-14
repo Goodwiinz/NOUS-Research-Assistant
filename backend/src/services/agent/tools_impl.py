@@ -3619,7 +3619,8 @@ async def _local_unscoped_fulltext_retrieve(
 
     Scope: always the caller's organization. With a project, the project is
     authorized with ``_verify_project_ownership`` and the read is narrowed to
-    its live member documents; an unverifiable project fails closed.
+    its live member documents. A stale or unowned page project degrades to
+    org-wide, matching the knowledge-base branch of ``_tool_do_kb_retrieve``.
     Failures return an ``error`` key so they are reported, not read as
     "no results".
     """
@@ -3635,37 +3636,44 @@ async def _local_unscoped_fulltext_retrieve(
         }
 
     document_ids: Optional[list[UUID]] = None
-    if project_id:
-        if db is None:
+    if project_id and db is not None:
+        try:
+            project = await _verify_project_ownership(project_id, db, current_user)
+            if project is None:
+                # Same degradation as the knowledge-base path below: the id
+                # usually comes from page context, which can be stale or name
+                # another member's project (trace 01a0209b). Org scope still
+                # applies, and org-wide results reveal nothing about it.
+                logger.warning(
+                    "do_kb_retrieve: project %s not found/owned; "
+                    "falling back to org-wide full-text retrieval",
+                    project_id,
+                )
+            else:
+                rows = await db.execute(
+                    select(CollectionDocument.document_id).where(
+                        CollectionDocument.collection_id == project.id,
+                        CollectionDocument.is_deleted == False,  # noqa: E712
+                    )
+                )
+                document_ids = [UUID(str(doc_id)) for doc_id in rows.scalars().all()]
+                if not document_ids:
+                    return {
+                        "chunks": [],
+                        "total": 0,
+                        "source": "postgres_fulltext",
+                        "reason": "project_has_no_documents",
+                    }
+        except Exception:
+            logger.warning(
+                "do_kb_retrieve: project document resolution failed", exc_info=True
+            )
             return {
                 "error": "Project documents could not be resolved",
                 "chunks": [],
                 "total": 0,
                 "source": "postgres_fulltext",
                 "reason": "project_unavailable",
-            }
-        project = await _verify_project_ownership(project_id, db, current_user)
-        if not project:
-            return {
-                "error": "Project not found or not accessible",
-                "chunks": [],
-                "total": 0,
-                "source": "postgres_fulltext",
-                "reason": "project_unavailable",
-            }
-        rows = await db.execute(
-            select(CollectionDocument.document_id).where(
-                CollectionDocument.collection_id == project.id,
-                CollectionDocument.is_deleted == False,  # noqa: E712
-            )
-        )
-        document_ids = [UUID(str(doc_id)) for doc_id in rows.scalars().all()]
-        if not document_ids:
-            return {
-                "chunks": [],
-                "total": 0,
-                "source": "postgres_fulltext",
-                "reason": "project_has_no_documents",
             }
 
     try:
