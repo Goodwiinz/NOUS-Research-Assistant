@@ -145,3 +145,28 @@ def test_message_author_filter_does_not_collide_with_access_param():
     assert params["access_user_id"] == str(caller_id)
     assert params["user_id"] == str(author_id)
     assert "m.user_id = :user_id" in sql
+
+
+def test_combined_search_both_ctes_exclude_legacy_agent_threads():
+    """Legacy shadow agent threads duplicate every /chat turn. The thread,
+    message and count builders exclude them, but combined_search builds its
+    own SQL and left them in, so /api/v2/search/combined returned two hits
+    per match. Each CTE must carry the exclusion."""
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    executed = {}
+
+    def _capture(clause, params=None):
+        executed["sql"] = str(clause)
+        result = MagicMock()
+        result.fetchall.return_value = []
+        return result
+
+    db.execute.side_effect = _capture
+    _svc().combined_search("neural", user_id=uuid4(), db=db)
+
+    thread_cte, message_cte = executed["sql"].split("message_matches AS (", 1)
+    marker = """@> '{"source": "agent"}'::jsonb"""
+    for half, label in ((thread_cte, "thread"), (message_cte, "message")):
+        assert marker in half, f"{label} CTE keeps legacy agent threads"
