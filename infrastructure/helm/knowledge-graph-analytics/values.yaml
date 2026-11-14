@@ -66,7 +66,9 @@ backend:
   # Graceful drain for long-lived WebSocket connections (see backend-deployment.yaml).
   # terminationGracePeriodSeconds must exceed terminationDrainSeconds + socket close.
   terminationDrainSeconds: 15
-  terminationGracePeriodSeconds: 45
+  # preStop drain (15s) + gunicorn graceful timeout (30s, GUNICORN_GRACEFUL_TIMEOUT
+  # in backend/docker/Dockerfile.prod) is 45s, so 45 left no margin before SIGKILL.
+  terminationGracePeriodSeconds: 60
 
   image:
     repository: your-registry/knowledge-graph-backend
@@ -191,6 +193,10 @@ backend:
 celeryWorker:
   enabled: true
   replicaCount: 2
+  # Warm-shutdown window; must exceed the global task_time_limit (600s,
+  # backend/src/tasks/celery_app.py). Tasks with longer per-task limits (the
+  # 960s arXiv ingest) can still be cut off and are redelivered by the broker.
+  terminationGracePeriodSeconds: 660
 
   image:
     repository: your-registry/knowledge-graph-backend

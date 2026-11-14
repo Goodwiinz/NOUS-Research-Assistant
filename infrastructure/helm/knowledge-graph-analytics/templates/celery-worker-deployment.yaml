@@ -32,6 +32,11 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "knowledge-graph-analytics.serviceAccountName" . }}
+      # SIGTERM starts Celery's warm shutdown: stop consuming, finish running
+      # tasks. Kubernetes' 30s default SIGKILLed any task still running, and
+      # task_acks_late only redelivers that message after the broker
+      # visibility timeout (1h). Must exceed task_time_limit (600s).
+      terminationGracePeriodSeconds: {{ .Values.celeryWorker.terminationGracePeriodSeconds | default 660 }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       containers:
