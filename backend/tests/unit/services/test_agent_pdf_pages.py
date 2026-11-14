@@ -649,7 +649,7 @@ async def test_document_only_without_pdf_never_searches_corpus(
 ) -> None:
     broad = AsyncMock(side_effect=AssertionError("must not search outside PDF scope"))
     monkeypatch.setattr(_nodes_rag, "_try_primary_do_kb_read", broad)
-    monkeypatch.setattr(_nodes_rag, "_legacy_hybrid_search_fallback", broad)
+    monkeypatch.setattr(_nodes_rag, "_hybrid_search_fallback_with_status", broad)
     result = await _nodes_rag.rag_node(
         {
             "messages": [HumanMessage(content="Find the relevant research")],

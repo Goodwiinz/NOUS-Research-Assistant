@@ -140,22 +140,158 @@ async def test_execute_tool_preserves_explicit_empty_document_scope(monkeypatch)
     assert captured.await_args.args[0]["document_ids"] == []
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_returns_empty_when_disabled(monkeypatch):
-    fake_settings = MagicMock()
-    fake_settings.DO_KB_ENABLED = False
-    monkeypatch.setattr(
-        "src.services.agent.tools_impl.settings", fake_settings, raising=False
+def _fulltext_hit(document_id: UUID, text: str = "matching passage") -> SimpleNamespace:
+    return SimpleNamespace(
+        results=[
+            SimpleNamespace(
+                document_id=str(document_id),
+                title="Indexed paper",
+                snippets=[SimpleNamespace(text=text)],
+                content_preview="preview",
+                relevance_score=0.5,
+            )
+        ]
     )
 
-    user = MagicMock()
-    user.organization_id = "org-1"
-    db = MagicMock()
-    result = await _tool_do_kb_retrieve({"query": "anything", "top_k": 4}, db, user)
+
+def _kb_off_patches(
+    fulltext_search: MagicMock, kb_lookup: AsyncMock, provider: AsyncMock
+):
+    disabled_settings = _settings()
+    disabled_settings.DO_KB_ENABLED = False
+    return (
+        patch("src.core.config.settings", disabled_settings),
+        patch(
+            "src.core.database.engine",
+            SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        ),
+        patch("src.services.do_kb.retrieval.resolve_org_kb_uuid", kb_lookup),
+        patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+        patch.object(fulltext_search_service, "search", fulltext_search),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_retrieval_uses_org_fulltext_when_kb_is_disabled():
+    """KB off (live dev) used to return an empty ``reason: disabled`` success.
+
+    The model then told users nothing was indexed. The read must now go to
+    org-scoped PostgreSQL full-text and return its chunks.
+    """
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    fulltext_search = MagicMock(return_value=_fulltext_hit(TARGET_ID))
+    kb_lookup = AsyncMock(return_value="kb-1")
+    provider = AsyncMock()
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, kb_lookup, provider)
+    with p1, p2, p3, p4, p5:
+        result = await _tool_do_kb_retrieve(
+            {"query": "transformer attention", "top_k": 4}, MagicMock(), user
+        )
+
+    assert "error" not in result
+    assert result["source"] == "postgres_fulltext"
+    assert result["total"] == 1
+    assert result["chunks"][0]["document_id"] == str(TARGET_ID)
+    assert result["chunks"][0]["text"] == "matching passage"
+    request = fulltext_search.call_args.kwargs["search_request"]
+    assert request.search_type.value == "fulltext"
+    assert request.filters is None
+    assert request.limit == 4
+    assert fulltext_search.call_args.kwargs["organization_id"] == str(
+        user.organization_id
+    )
+    kb_lookup.assert_not_awaited()
+    provider.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_fulltext_failure_is_reported_as_error():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    fulltext_search = MagicMock(side_effect=RuntimeError("db down"))
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
+    with p1, p2, p3, p4, p5:
+        result = await _tool_do_kb_retrieve({"query": "anything"}, MagicMock(), user)
+
+    assert result["error"] == "Document retrieval failed"
+    assert "db down" not in str(result)
     assert result["chunks"] == []
+    assert result["reason"] == "local_fulltext_search_failed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_no_match_is_empty_without_error():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    fulltext_search = MagicMock(return_value=SimpleNamespace(results=[]))
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
+    with p1, p2, p3, p4, p5:
+        result = await _tool_do_kb_retrieve({"query": "anything"}, MagicMock(), user)
+
+    assert "error" not in result
     assert result["total"] == 0
-    assert result.get("reason") == "disabled"
+    assert result["reason"] == "no_matches"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_project_retrieval_is_narrowed_to_member_documents():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    project = SimpleNamespace(id=UUID(int=99))
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_scalar_result([TARGET_ID]))
+    verify = AsyncMock(return_value=project)
+    fulltext_search = MagicMock(return_value=_fulltext_hit(TARGET_ID))
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
+    with (
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        patch.object(tools_impl, "_verify_project_ownership", verify),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "attention"}, db, user, project_id=str(project.id)
+        )
+
+    verify.assert_awaited_once()
+    member_sql = str(db.execute.await_args.args[0]).lower()
+    assert "collection_documents.collection_id" in member_sql
+    assert "collection_documents.is_deleted = false" in member_sql
+    request = fulltext_search.call_args.kwargs["search_request"]
+    assert request.filters.document_ids == [str(TARGET_ID)]
+    assert result["chunks"][0]["document_id"] == str(TARGET_ID)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unscoped_project_retrieval_fails_closed_on_unowned_project():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    fulltext_search = MagicMock(return_value=_fulltext_hit(DISTRACTOR_ID))
+    verify = AsyncMock(return_value=None)
+
+    p1, p2, p3, p4, p5 = _kb_off_patches(fulltext_search, AsyncMock(), AsyncMock())
+    with (
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        patch.object(tools_impl, "_verify_project_ownership", verify),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "attention"}, MagicMock(), user, project_id=str(UUID(int=7))
+        )
+
+    assert result["error"] == "Project not found or not accessible"
+    assert result["chunks"] == []
+    fulltext_search.assert_not_called()
 
 
 @pytest.mark.unit

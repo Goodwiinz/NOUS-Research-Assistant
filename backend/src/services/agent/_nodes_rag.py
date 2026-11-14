@@ -30,7 +30,7 @@ import json
 import logging
 import math
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage
@@ -1331,7 +1331,23 @@ async def _legacy_hybrid_search_fallback(
     organization_id: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> List[dict]:
+    """Fallback to hybrid search; returns contexts only (see ``*_with_status``)."""
+    contexts, _status = await _hybrid_search_fallback_with_status(
+        query, user_id, organization_id, project_id=project_id
+    )
+    return contexts
+
+
+async def _hybrid_search_fallback_with_status(
+    query: str,
+    user_id: str,
+    organization_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Tuple[List[dict], str]:
     """Fallback to hybrid search when DO KB is unavailable or returns nothing.
+
+    Returns ``(contexts, status)`` where status is ``"ok"``, ``"empty"`` or
+    ``"error"``, so a failed search is not mistaken for an empty corpus.
 
     Takes scalar ids from the ids-only configurable (audit B8). When a project
     is active, resolve its owned document ids first and reuse SearchFilter's
@@ -1353,7 +1369,7 @@ async def _legacy_hybrid_search_fallback(
                 project_uuid = UUID(str(project_id))
                 user_uuid = UUID(str(user_id))
             except (ValueError, TypeError, AttributeError):
-                return []
+                return [], "error"
 
             from sqlalchemy import select
 
@@ -1383,7 +1399,7 @@ async def _legacy_hybrid_search_fallback(
                     .all()
                 )
             if not document_ids:
-                return []
+                return [], "empty"
             filters = SearchFilter(
                 document_ids=[str(document_id) for document_id in document_ids]
             )
@@ -1426,10 +1442,10 @@ async def _legacy_hybrid_search_fallback(
                     "score": float(score),
                 }
             )
-        return contexts
+        return contexts, ("ok" if contexts else "empty")
     except Exception:
         logger.warning("hybrid search fallback failed", exc_info=True)
-        return []
+        return [], "error"
 
 
 # ---------------------------------------------------------------------------
@@ -1688,10 +1704,18 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
             contexts = _normalize_injected_contexts(
                 await search_fn(last_user_msg, user_id)
             )
-            return {"retrieved_contexts": contexts, **state_update}
+            return {
+                "retrieved_contexts": contexts,
+                "retrieval_status": "ok" if contexts else "empty",
+                **state_update,
+            }
         except Exception as e:
             logger.warning("injected search_fn failed", exc_info=e)
-            return {"retrieved_contexts": [], **state_update}
+            return {
+                "retrieved_contexts": [],
+                "retrieval_status": "error",
+                **state_update,
+            }
 
     # Clean the retrieval query: drop instruction clauses, prefer quoted
     # entity names. Keep last_user_msg raw for project-id/intent checks above.
@@ -1703,9 +1727,15 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
     # — the org KB indexes every project's docs, so without a project
     # filter the chunks are noise that bloats input by ~10k chars. The
     # agent will use search_arxiv/search_documents for explicit lookup.
+    # "skipped", not "empty": the prompt must not tell the model the corpus
+    # has nothing relevant when it was never searched.
     if not resolved_project_id:
         logger.debug("rag_node: skipping DO KB read — no active project context")
-        return {"retrieved_contexts": [], **state_update}
+        return {
+            "retrieved_contexts": [],
+            "retrieval_status": "skipped",
+            **state_update,
+        }
 
     # Production retrieval: DO KB primary, hybrid search fallback.
     # Pass resolved_project_id so KB results stay scoped to the active project
@@ -1719,16 +1749,20 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
     # unfiltered legacy hybrid search — only an actually unavailable/errored/
     # empty primary read (which always returns None) may fall back.
     if primary_contexts is not None:
-        return {"retrieved_contexts": primary_contexts, **state_update}
+        return {
+            "retrieved_contexts": primary_contexts,
+            "retrieval_status": "ok" if primary_contexts else "empty",
+            **state_update,
+        }
 
     _record_do_kb_read("fallback_used")
-    contexts = await _legacy_hybrid_search_fallback(
+    contexts, status = await _hybrid_search_fallback_with_status(
         search_query,
         user_id,
         organization_id,
         project_id=resolved_project_id,
     )
-    return {"retrieved_contexts": contexts, **state_update}
+    return {"retrieved_contexts": contexts, "retrieval_status": status, **state_update}
 
 
 __all__ = [
@@ -1737,5 +1771,6 @@ __all__ = [
     "_shape_do_kb_context",
     "_try_primary_do_kb_read",
     "_legacy_hybrid_search_fallback",
+    "_hybrid_search_fallback_with_status",
     "rag_node",
 ]

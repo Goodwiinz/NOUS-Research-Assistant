@@ -71,7 +71,8 @@ def test_search_with_organization_still_queries(
     rows.fetchall.return_value = []
     count = MagicMock()
     count.scalar.return_value = 0
-    db.execute.side_effect = [rows, count]
+    # All-term match, then the any-term retry a zero-hit two-word query gets.
+    db.execute.side_effect = [rows, count, rows, count]
 
     service = FullTextSearchService()
     monkeypatch.setattr(service, "_get_search_suggestions", lambda *a, **k: [])
@@ -84,6 +85,6 @@ def test_search_with_organization_still_queries(
     )
 
     assert response.results == []
-    assert db.execute.call_count == 2
-    params = db.execute.call_args_list[0].args[1]
-    assert params["organization_id"] == ORG_ID
+    assert db.execute.call_count == 4
+    for call in db.execute.call_args_list:
+        assert call.args[1]["organization_id"] == ORG_ID

@@ -516,7 +516,9 @@ class TestRagNodeFastPath:
         primary_read = AsyncMock(return_value=[{"content": "corpus distractor"}])
         fallback_read = AsyncMock(return_value=[{"content": "corpus distractor"}])
         monkeypatch.setattr(_nodes_rag, "_try_primary_do_kb_read", primary_read)
-        monkeypatch.setattr(_nodes_rag, "_legacy_hybrid_search_fallback", fallback_read)
+        monkeypatch.setattr(
+            _nodes_rag, "_hybrid_search_fallback_with_status", fallback_read
+        )
 
         contexts, statuses = await _load_attachment_contexts(
             attachment_ids=[],

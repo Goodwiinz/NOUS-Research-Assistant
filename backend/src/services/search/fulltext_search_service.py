@@ -230,21 +230,22 @@ class FullTextSearchService:
             should_close_db = True
 
         try:
-            # Build the search query
-            search_sql, params = self._build_search_query(
-                search_request, user_id, organization_id
+            rows, total_count = self._execute_match(
+                db, search_request, user_id, organization_id, match_any=False
             )
-
-            # Execute search
-            result = db.execute(text(search_sql), params)
-            rows = result.fetchall()
-
-            # Get total count for pagination
-            count_sql, count_params = self._build_count_query(
-                search_request, user_id, organization_id
-            )
-            count_result = db.execute(text(count_sql), count_params)
-            total_count = count_result.scalar()
+            # plainto_tsquery ANDs every lexeme, so a natural-language
+            # question needs every stem in one document. When the strict match
+            # finds nothing for a multi-term query, retry with any-term match;
+            # ts_rank_cd still ranks documents covering more terms first. The
+            # count query uses the same mode, so total/has_more stay consistent.
+            if not total_count and self._has_multiple_terms(search_request.query):
+                rows, total_count = self._execute_match(
+                    db, search_request, user_id, organization_id, match_any=True
+                )
+                logger.debug(
+                    "Full-text search fell back to any-term match (%d hits)",
+                    total_count or 0,
+                )
 
             # Process results
             search_results = []
@@ -335,16 +336,55 @@ class FullTextSearchService:
         matches = sum(haystack.count(term) for term in terms)
         return round(matches / max(len(terms), 1), 4)
 
+    def _execute_match(
+        self,
+        db: Session,
+        search_request: SearchQuery,
+        user_id: Optional[str],
+        organization_id: Optional[str],
+        *,
+        match_any: bool,
+    ) -> Tuple[List[Any], int]:
+        """Run the result and count queries with one match mode."""
+        search_sql, params = self._build_search_query(
+            search_request, user_id, organization_id, match_any=match_any
+        )
+        rows = db.execute(text(search_sql), params).fetchall()
+        count_sql, count_params = self._build_count_query(
+            search_request, user_id, organization_id, match_any=match_any
+        )
+        total_count = db.execute(text(count_sql), count_params).scalar() or 0
+        return rows, total_count
+
+    def _has_multiple_terms(self, query: str) -> bool:
+        return len(self._prepare_search_terms(query).split()) > 1
+
+    @staticmethod
+    def _tsquery_sql(match_any: bool) -> str:
+        """tsquery expression bound to ``:query``.
+
+        ``match_any`` rewrites plainto_tsquery's normalised ``'a' & 'b'``
+        output to ``'a' | 'b'``. The input has already been reduced to
+        ``\\w`` words by ``_prepare_search_terms``, so plainto_tsquery never
+        emits phrase operators and the rewrite always yields a valid tsquery.
+        """
+        if match_any:
+            return "replace(plainto_tsquery('english', :query)::text, ' & ', ' | ')::tsquery"
+        return "plainto_tsquery('english', :query)"
+
     def _build_search_query(
         self,
         search_request: SearchQuery,
         user_id: str = None,
         organization_id: str = None,
+        *,
+        match_any: bool = False,
     ) -> Tuple[str, Dict[str, Any]]:
         """Build PostgreSQL full-text search SQL query"""
 
         # Prepare search terms
         search_terms = self._prepare_search_terms(search_request.query)
+        tsquery = self._tsquery_sql(match_any)
 
         # Base query with full-text search.
         # Scale contract: raw ts_rank_cd() is naturally bounded ~0-1 for
@@ -359,16 +399,16 @@ class FullTextSearchService:
             "    d.id, d.title, d.document_type, d.content_text, d.content_summary,",
             "    d.file_size_bytes, d.created_at, d.updated_at, d.processing_status,",
             "    d.tags, d.is_public, d.uploaded_by_user_id, d.organization_id, d.document_metadata,",
-            "    ts_rank_cd(search_vector, plainto_tsquery('english', :query)) * 10 as relevance_score,",
-            "    ts_headline('english', coalesce(d.content_text, ''), plainto_tsquery('english', :query),",
+            f"    ts_rank_cd(search_vector, {tsquery}) * 10 as relevance_score,",
+            f"    ts_headline('english', coalesce(d.content_text, ''), {tsquery},",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords={self.snippet_length}, MinWords={self.snippet_surround}') as highlighted_content,",
-            "    ts_headline('english', coalesce(d.title, ''), plainto_tsquery('english', :query),",
+            f"    ts_headline('english', coalesce(d.title, ''), {tsquery},",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords=50, MinWords=10') as highlighted_title",
             "FROM documents d",
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery('english', :query)",
+            f"    AND search_vector @@ {tsquery}",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",
@@ -412,10 +452,13 @@ class FullTextSearchService:
         search_request: SearchQuery,
         user_id: str = None,
         organization_id: str = None,
+        *,
+        match_any: bool = False,
     ) -> Tuple[str, Dict[str, Any]]:
         """Build count query for pagination"""
 
         search_terms = self._prepare_search_terms(search_request.query)
+        tsquery = self._tsquery_sql(match_any)
 
         query_parts = [
             "SELECT COUNT(*) as total_count",
@@ -423,7 +466,7 @@ class FullTextSearchService:
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery('english', :query)",
+            f"    AND search_vector @@ {tsquery}",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",

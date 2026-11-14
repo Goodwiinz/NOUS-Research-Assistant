@@ -23,6 +23,11 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     page_context: dict
     retrieved_contexts: list
+    # Why ``retrieved_contexts`` holds what it does, set by rag_node each turn:
+    # "ok" (contexts found), "empty" (searched, nothing matched), "skipped"
+    # (automatic retrieval did not run, e.g. no active project) or "error"
+    # (retrieval failed). Unset means unknown and renders as "empty".
+    retrieval_status: NotRequired[Literal["ok", "empty", "skipped", "error"] | None]
     # Server-validated document ids for the current turn. The rag node treats
     # a non-empty list as an exact source scope and never widens it to corpus
     # search; an empty list may resolve the latest thread-owned attachments on

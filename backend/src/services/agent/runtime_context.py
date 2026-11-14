@@ -12,7 +12,7 @@ from src.services.agent._prompts import INTENT_PROMPTS
 from src.services.agent._sanitize import sanitize_page_context, wrap_untrusted
 from src.services.agent.identity_ledger import render_identity_ledger
 from src.services.agent.retrieval_provenance import (
-    NO_RETRIEVAL_GUIDANCE,
+    no_retrieval_guidance,
     retrieval_prompt_blocks,
 )
 
@@ -381,7 +381,7 @@ def _other_context_blocks(
         blocks.append("Retrieved context:")
         blocks.extend(retrieval_prompt_blocks(retrieved[:20], messages))
     else:
-        blocks.append(NO_RETRIEVAL_GUIDANCE)
+        blocks.append(no_retrieval_guidance(state.get("retrieval_status")))
 
     if not execution_closed:
         from src.services.agent.tool_registry import runtime_tool_descriptors
